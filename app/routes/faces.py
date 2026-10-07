@@ -1,3 +1,4 @@
+from html import escape
 from pathlib import Path
 import tempfile
 
@@ -53,7 +54,8 @@ async def search_faces(project_id: int, reference: UploadFile = File(...), mode:
     if len(data) > 20 * 1024 * 1024:
         raise HTTPException(413, "Reference image is too large")
     with tempfile.NamedTemporaryFile(suffix=suffix) as temp:
-        temp.write(data); temp.flush()
+        temp.write(data)
+        temp.flush()
         image = cv.imread(temp.name)
         if image is None:
             raise HTTPException(400, "Reference image could not be read")
@@ -71,6 +73,9 @@ async def search_faces(project_id: int, reference: UploadFile = File(...), mode:
         photo = session.get(Photo, face.photo_id)
         source = session.get(PhotoSource, face.source_id)
         if photo and source:
-            cards.append(f'<div class="card"><h3>{photo.name}</h3><div class="pill">Similarity {score:.3f}</div><p class="muted">Source: {source.display_name or source.source_type}</p></div>')
-    body = f'<div class="row" style="justify-content:space-between"><div><h1>Search Results</h1><p class="muted">{len(cards)} matching photographs · {mode.title()} mode. Similarity is not an identity probability.</p></div><a class="button secondary" href="/ui/projects/{project_id}">Back to Project</a></div><div class="grid">{"".join(cards) or "<div class=\"card\">No matches found. Try Balanced or Broad mode, or another reference photo.</div>"}</div>'
+            cards.append(f'<div class="card"><h3>{escape(photo.name)}</h3><div class="pill">Similarity {score:.3f}</div><p class="muted">Source: {escape(source.display_name or source.source_type)}</p></div>')
+    results_html = "".join(cards)
+    if not results_html:
+        results_html = '<div class="card">No matches found. Try Balanced or Broad mode, or another reference photo.</div>'
+    body = f'<div class="row" style="justify-content:space-between"><div><h1>Search Results</h1><p class="muted">{len(cards)} matching photographs · {escape(mode.title())} mode. Similarity is not an identity probability.</p></div><a class="button secondary" href="/ui/projects/{project_id}">Back to Project</a></div><div class="grid">{results_html}</div>'
     return page(f"{project.name} Search", body)
