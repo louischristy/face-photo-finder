@@ -3,7 +3,7 @@ from pathlib import Path
 import cv2 as cv
 import numpy as np
 from pillow_heif import register_heif_opener
-from PIL import Image
+from PIL import Image, ImageOps
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
@@ -24,7 +24,7 @@ def embedding_from_bytes(value: bytes, dim: int) -> np.ndarray:
     return result
 
 
-def _local_photo_path(source: PhotoSource, photo: Photo) -> Path:
+def local_photo_path(source: PhotoSource, photo: Photo) -> Path:
     root = Path(source.source_uri).expanduser().resolve()
     path = (root / photo.source_item_key).resolve()
     if root != path and root not in path.parents:
@@ -35,9 +35,10 @@ def _local_photo_path(source: PhotoSource, photo: Photo) -> Path:
 
 
 def load_local_image(source: PhotoSource, photo: Photo) -> np.ndarray:
-    path = _local_photo_path(source, photo)
+    path = local_photo_path(source, photo)
     with Image.open(path) as image:
-        rgb = np.asarray(image.convert("RGB"))
+        corrected = ImageOps.exif_transpose(image)
+        rgb = np.asarray(corrected.convert("RGB"))
     return cv.cvtColor(rgb, cv.COLOR_RGB2BGR)
 
 
