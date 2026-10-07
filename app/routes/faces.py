@@ -1,10 +1,13 @@
 from html import escape
+from io import BytesIO
 from pathlib import Path
-import tempfile
 
 import cv2 as cv
+import numpy as np
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse
+from pillow_heif import register_heif_opener
+from PIL import Image, ImageOps
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -15,6 +18,7 @@ from app.services.face_indexer import index_pending_local_photos
 from app.services.face_matching import find_similar_faces
 from app.ui import page
 
+register_heif_opener()
 router = APIRouter(prefix="/projects", tags=["faces"])
 MODELS = Path("models")
 DETECTOR = MODELS / "face_detection_yunet_2023mar.onnx"
@@ -26,6 +30,16 @@ def _engine() -> OpenCVFaceEngine:
         return OpenCVFaceEngine(DETECTOR, RECOGNIZER)
     except FileNotFoundError as exc:
         raise HTTPException(503, str(exc)) from exc
+
+
+def _decode_reference(data: bytes) -> np.ndarray:
+    try:
+        with Image.open(BytesIO(data)) as image:
+            corrected = ImageOps.exif_transpose(image)
+            rgb = np.asarray(corrected.convert("RGB"))
+        return cv.cvtColor(rgb, cv.COLOR_RGB2BGR)
+    except Exception as exc:
+        raise HTTPException(400, "Reference image could not be read") from exc
 
 
 @router.post("/{project_id}/faces/index")
@@ -49,17 +63,12 @@ async def search_faces(project_id: int, reference: UploadFile = File(...), mode:
     selected = tuple(dict.fromkeys(source_ids or []))
     if set(selected) - allowed:
         raise HTTPException(400, "Selected source does not belong to this project")
-    suffix = Path(reference.filename or "reference.jpg").suffix or ".jpg"
     data = await reference.read()
+    if not data:
+        raise HTTPException(400, "Reference image is empty")
     if len(data) > 20 * 1024 * 1024:
         raise HTTPException(413, "Reference image is too large")
-    with tempfile.NamedTemporaryFile(suffix=suffix) as temp:
-        temp.write(data)
-        temp.flush()
-        image = cv.imread(temp.name)
-        if image is None:
-            raise HTTPException(400, "Reference image could not be read")
-        detected = _engine().detect_and_embed(image)
+    detected = _engine().detect_and_embed(_decode_reference(data))
     if not detected:
         raise HTTPException(400, "No face was detected in the reference image")
     reference_face = max(detected, key=lambda item: item.bbox[2] * item.bbox[3])
@@ -73,9 +82,11 @@ async def search_faces(project_id: int, reference: UploadFile = File(...), mode:
         photo = session.get(Photo, face.photo_id)
         source = session.get(PhotoSource, face.source_id)
         if photo and source:
-            cards.append(f'<div class="card"><h3>{escape(photo.name)}</h3><div class="pill">Similarity {score:.3f}</div><p class="muted">Source: {escape(source.display_name or source.source_type)}</p></div>')
+            preview = f'<img src="/media/photos/{photo.id}" alt="{escape(photo.name)}" style="width:100%;height:260px;object-fit:cover;border-radius:12px">' if source.source_type == "local_folder" else ""
+            actions = f'<p><a class="button" href="/media/photos/{photo.id}" target="_blank">Open Original</a> <a class="button secondary" href="/media/photos/{photo.id}/download">Download</a></p>' if source.source_type == "local_folder" else ""
+            cards.append(f'<div class="card">{preview}<h3>{escape(photo.name)}</h3><div class="pill">Similarity {score:.3f}</div><p class="muted">Source: {escape(source.display_name or source.source_type)}</p>{actions}</div>')
     results_html = "".join(cards)
     if not results_html:
         results_html = '<div class="card">No matches found. Try Balanced or Broad mode, or another reference photo.</div>'
-    body = f'<div class="row" style="justify-content:space-between"><div><h1>Search Results</h1><p class="muted">{len(cards)} matching photographs · {escape(mode.title())} mode. Similarity is not an identity probability.</p></div><a class="button secondary" href="/ui/projects/{project_id}">Back to Project</a></div><div class="grid">{results_html}</div>'
+    body = f'<div class="row" style="justify-content:space-between"><div><h1>Search Results</h1><p class="muted">{len(cards)} matching photographs · {escape(mode.title())} mode. Similarity is a ranking signal, not an identity probability.</p></div><a class="button secondary" href="/ui/projects/{project_id}">Back to Project</a></div><div class="grid">{results_html}</div>'
     return page(f"{project.name} Search", body)
