@@ -82,8 +82,8 @@ async def search_faces(project_id: int, reference: UploadFile = File(...), mode:
         photo = session.get(Photo, face.photo_id)
         source = session.get(PhotoSource, face.source_id)
         if photo and source:
-            preview = f'<img src="/media/photos/{photo.id}" alt="{escape(photo.name)}" style="width:100%;height:260px;object-fit:cover;border-radius:12px">' if source.source_type == "local_folder" else ""
-            actions = f'<p><a class="button" href="/media/photos/{photo.id}" target="_blank">Open Original</a> <a class="button secondary" href="/media/photos/{photo.id}/download">Download</a></p>' if source.source_type == "local_folder" else ""
+            preview = f'<img src="/media/photos/{photo.id}" alt="{escape(photo.name)}" loading="lazy" style="width:100%;height:260px;object-fit:cover;border-radius:12px">'
+            actions = f'<p><a class="button" href="/media/photos/{photo.id}" target="_blank">View Photo</a> <a class="button secondary" href="/media/photos/{photo.id}/download">Download Original</a></p>'
             cards.append(f'<div class="card">{preview}<h3>{escape(photo.name)}</h3><div class="pill">Similarity {score:.3f}</div><p class="muted">Source: {escape(source.display_name or source.source_type)}</p>{actions}</div>')
     results_html = "".join(cards)
     if not results_html:
