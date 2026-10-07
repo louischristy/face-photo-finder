@@ -18,6 +18,9 @@ class GoogleDriveClient:
         self.service = build("drive", "v3", credentials=self._credentials(), cache_discovery=False)
 
     def _credentials(self) -> Credentials:
+        if not self.credentials_path.exists():
+            raise FileNotFoundError(f"Google OAuth credentials file not found: {self.credentials_path}")
+        self.token_path.parent.mkdir(parents=True, exist_ok=True)
         creds = None
         if self.token_path.exists():
             creds = Credentials.from_authorized_user_file(str(self.token_path), SCOPES)
@@ -28,6 +31,9 @@ class GoogleDriveClient:
             creds = flow.run_local_server(port=0)
         self.token_path.write_text(creds.to_json(), encoding="utf-8")
         return creds
+
+    def account_identity(self) -> dict:
+        return self.service.about().get(fields="user(displayName,emailAddress,photoLink)").execute().get("user", {})
 
     def folder_metadata(self, folder_id: str) -> dict:
         return self.service.files().get(
