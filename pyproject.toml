@@ -1,7 +1,7 @@
 [project]
 name = "face-photo-finder"
-version = "0.1.0"
-description = "Local-first Google Drive photo indexing and face search application"
+version = "0.4.0"
+description = "Local-first mixed-storage photo indexing and face search application"
 requires-python = ">=3.11,<3.14"
 dependencies = [
   "fastapi>=0.115,<1",
@@ -15,7 +15,10 @@ dependencies = [
   "google-auth-oauthlib>=1.2,<2",
   "google-auth-httplib2>=0.2,<1",
   "pillow>=11,<13",
-  "numpy>=2,<3"
+  "pillow-heif>=0.20,<2",
+  "numpy>=2,<3",
+  "opencv-python-headless>=4.10,<5",
+  "scikit-learn>=1.5,<2"
 ]
 
 [project.optional-dependencies]
