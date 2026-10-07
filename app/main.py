@@ -1,16 +1,12 @@
 from contextlib import asynccontextmanager
-from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
-from sqlalchemy import create_engine
 
+from app.database import engine
 from app.models import Base
-
-DATA_DIR = Path("data")
-DATA_DIR.mkdir(exist_ok=True)
-DATABASE_URL = f"sqlite:///{DATA_DIR / 'face_photo_finder.sqlite3'}"
-engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
+from app.routes.projects import router as projects_router
+from app.routes.search import router as search_router
 
 
 @asynccontextmanager
@@ -19,12 +15,14 @@ async def lifespan(_: FastAPI):
     yield
 
 
-app = FastAPI(title="Face Photo Finder", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="Face Photo Finder", version="0.2.0", lifespan=lifespan)
+app.include_router(projects_router)
+app.include_router(search_router)
 
 
 @app.get("/health")
 def health() -> dict[str, str]:
-    return {"status": "ok"}
+    return {"status": "ok", "version": "0.2.0"}
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -37,25 +35,31 @@ def home() -> str:
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <title>Face Photo Finder</title>
         <style>
-          body { font-family: system-ui, sans-serif; margin: 0; background:#f6f7f9; color:#172033; }
-          main { max-width: 920px; margin: 70px auto; padding: 0 24px; }
-          .card { background:white; border-radius:18px; padding:32px; box-shadow:0 10px 35px rgba(0,0,0,.08); }
-          h1 { margin-top:0; }
-          .badge { display:inline-block; padding:7px 11px; border-radius:999px; background:#e9f8ee; }
-          .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(210px,1fr)); gap:14px; margin-top:24px; }
-          .item { padding:18px; border:1px solid #e5e7eb; border-radius:14px; }
+          body { font-family: system-ui, sans-serif; margin:0; background:#f5f7fa; color:#172033; }
+          main { max-width:1000px; margin:64px auto; padding:0 24px; }
+          .card { background:white; border-radius:20px; padding:34px; box-shadow:0 12px 40px rgba(0,0,0,.07); }
+          .badge { display:inline-block; padding:7px 12px; border-radius:999px; background:#e8f7ee; }
+          .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(210px,1fr)); gap:14px; margin-top:26px; }
+          .item { padding:20px; border:1px solid #e4e8ef; border-radius:15px; }
+          form { display:flex; gap:10px; margin-top:28px; }
+          input { flex:1; padding:12px 14px; border:1px solid #cfd6e2; border-radius:10px; font-size:16px; }
+          button { padding:12px 18px; border:0; border-radius:10px; font-weight:650; cursor:pointer; }
         </style>
       </head>
       <body><main><div class="card">
         <span class="badge">Local service running</span>
         <h1>Face Photo Finder</h1>
-        <p>Private, project-based Google Drive photo discovery and face-search application.</p>
+        <p>Create a project, attach Google Drive, local or external-drive photo sources, then choose exactly which project sources should be searched.</p>
         <div class="grid">
-          <div class="item"><strong>Projects</strong><br>Isolated photo collections</div>
-          <div class="item"><strong>Drive Sources</strong><br>Multiple folders per project</div>
-          <div class="item"><strong>Local Index</strong><br>Private on-device processing</div>
-          <div class="item"><strong>Downloads</strong><br>Originals and ZIP bundles</div>
+          <div class="item"><strong>Projects</strong><br>Separate events and collections</div>
+          <div class="item"><strong>Mixed Storage</strong><br>Google accounts + local/external drives</div>
+          <div class="item"><strong>Search Scope</strong><br>All sources or selected sources</div>
+          <div class="item"><strong>Private Index</strong><br>Face processing remains local</div>
         </div>
+        <form action="/projects" method="post">
+          <input name="name" placeholder="New project name" required>
+          <button type="submit">Create Project</button>
+        </form>
       </div></main></body>
     </html>
     """
