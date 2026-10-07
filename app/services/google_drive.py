@@ -1,10 +1,12 @@
 from collections.abc import Iterator
+from io import BytesIO
 from pathlib import Path
 
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
+from googleapiclient.http import MediaIoBaseDownload
 
 SCOPES = ["https://www.googleapis.com/auth/drive.readonly"]
 FOLDER_MIME = "application/vnd.google-apps.folder"
@@ -41,6 +43,15 @@ class GoogleDriveClient:
             fields="id,name,mimeType,webViewLink",
             supportsAllDrives=True,
         ).execute()
+
+    def download_file(self, file_id: str) -> bytes:
+        request = self.service.files().get_media(fileId=file_id, supportsAllDrives=True)
+        output = BytesIO()
+        downloader = MediaIoBaseDownload(output, request, chunksize=4 * 1024 * 1024)
+        done = False
+        while not done:
+            _, done = downloader.next_chunk()
+        return output.getvalue()
 
     def walk_images(self, root_folder_id: str) -> Iterator[dict]:
         pending = [root_folder_id]
