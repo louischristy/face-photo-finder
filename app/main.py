@@ -7,6 +7,7 @@ from app.database import engine
 from app.models import Base
 from app.routes.accounts import router as accounts_router
 from app.routes.faces import router as faces_router
+from app.routes.gallery import router as gallery_router
 from app.routes.media import router as media_router
 from app.routes.projects import router as projects_router
 from app.routes.search import router as search_router
@@ -25,6 +26,7 @@ app.include_router(accounts_router)
 app.include_router(projects_router)
 app.include_router(search_router)
 app.include_router(faces_router)
+app.include_router(gallery_router)
 app.include_router(media_router)
 app.include_router(ui_router)
 
