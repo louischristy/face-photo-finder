@@ -7,7 +7,7 @@ from PIL import Image, ImageOps
 from sqlalchemy.orm import Session
 
 from app.database import get_session
-from app.models import Photo, PhotoSource
+from app.models import Face, Photo, PhotoSource
 from app.services.face_indexer import google_photo_bytes, local_photo_path
 
 register_heif_opener()
@@ -29,6 +29,46 @@ def _drive_bytes(session: Session, source: PhotoSource, photo: Photo) -> bytes:
         return google_photo_bytes(session, source, photo)
     except Exception as exc:
         raise HTTPException(502, f"Unable to retrieve Google Drive photo: {photo.name}") from exc
+
+
+def _photo_image(session: Session, photo: Photo, source: PhotoSource) -> Image.Image:
+    try:
+        if source.source_type == "local_folder":
+            data = local_photo_path(source, photo).read_bytes()
+        elif source.source_type == "google_drive":
+            data = _drive_bytes(session, source, photo)
+        else:
+            raise HTTPException(400, "Unsupported storage provider")
+        with Image.open(BytesIO(data)) as image:
+            return ImageOps.exif_transpose(image).convert("RGB")
+    except HTTPException:
+        raise
+    except FileNotFoundError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(415, "Image could not be rendered") from exc
+
+
+@router.get("/faces/{face_id}")
+def preview_face(face_id: int, session: Session = Depends(get_session)):
+    face = session.get(Face, face_id)
+    if not face:
+        raise HTTPException(404, "Face not found")
+    photo, source = _resolve_photo(face.photo_id, session)
+    image = _photo_image(session, photo, source)
+    pad_x = max(12, int(face.bbox_w * 0.35))
+    pad_y = max(12, int(face.bbox_h * 0.35))
+    left = max(0, face.bbox_x - pad_x)
+    top = max(0, face.bbox_y - pad_y)
+    right = min(image.width, face.bbox_x + face.bbox_w + pad_x)
+    bottom = min(image.height, face.bbox_y + face.bbox_h + pad_y)
+    if right <= left or bottom <= top:
+        raise HTTPException(422, "Stored face crop is invalid")
+    crop = image.crop((left, top, right, bottom))
+    crop.thumbnail((480, 480))
+    output = BytesIO()
+    crop.save(output, format="JPEG", quality=86, optimize=True)
+    return Response(output.getvalue(), media_type="image/jpeg", headers={"Cache-Control": "private, max-age=900"})
 
 
 @router.get("/photos/{photo_id}")
