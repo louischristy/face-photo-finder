@@ -14,14 +14,15 @@ from starlette.background import BackgroundTask
 from app.auth import require_user
 from app.database import get_session
 from app.models import Face, Photo, PhotoSource, Project, User
+from app.runtime import application_data_dir
 from app.services.face_indexer import embedding_from_bytes, google_photo_bytes, local_photo_path
 from app.services.face_matching import SEARCH_THRESHOLDS, find_similar_faces
 
 register_heif_opener()
 router = APIRouter(prefix="/media", tags=["media"])
 bulk_router = APIRouter(prefix="/projects", tags=["media"])
-CACHE_ROOT = Path("data/cache/previews")
-BULK_TEMP_ROOT = Path("data/temp/downloads")
+CACHE_ROOT = application_data_dir() / "cache" / "previews"
+BULK_TEMP_ROOT = application_data_dir() / "temp" / "downloads"
 
 
 def _resolve_photo(photo_id: int, session: Session):
