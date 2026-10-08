@@ -63,3 +63,18 @@ jobs:
         run: |
           test -s "dist/Auroara-Face-Photo-Finder-0.7.0.dmg"
           hdiutil verify "dist/Auroara-Face-Photo-Finder-0.7.0.dmg"
+      - name: Build Windows installer
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $iscc = Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6\ISCC.exe'
+          if (-not (Test-Path $iscc)) { throw "Inno Setup compiler not found: $iscc" }
+          & $iscc 'packaging\windows\AuroaraFacePhotoFinder.iss'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Validate Windows installer
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $installer = 'dist\installer\Auroara-Face-Photo-Finder-0.7.0-Setup.exe'
+          if (-not (Test-Path $installer)) { throw "Installer not found: $installer" }
+          if ((Get-Item $installer).Length -le 0) { throw 'Installer is empty' }
