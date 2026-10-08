@@ -90,6 +90,55 @@ def _ordered_photo_matches(session: Session, project_id: int, reference_face: Fa
     return sorted(best_by_photo.values(), key=lambda item: (item[1], _face_quality(item[0])), reverse=True)
 
 
+THUMB_SCRIPT = '''<script>
+(function() {
+  const queue = Array.from(document.querySelectorAll('img.face-thumb[data-src]'));
+  let active = 0;
+  const limit = 4;
+  function pump() {
+    while (active < limit && queue.length) {
+      const img = queue.shift();
+      active++;
+      let attempt = 0;
+      const load = function() {
+        attempt++;
+        img.onload = function() { active--; pump(); };
+        img.onerror = function() {
+          if (attempt < 3) {
+            setTimeout(load, attempt * 1200);
+          } else {
+            img.onerror = null;
+            img.alt = 'Preview temporarily unavailable';
+            img.style.opacity = '0.35';
+            active--;
+            pump();
+          }
+        };
+        const joiner = img.dataset.src.indexOf('?') >= 0 ? '&' : '?';
+        img.src = img.dataset.src + joiner + 'attempt=' + attempt + '&t=' + Date.now();
+      };
+      load();
+    }
+  }
+  if ('IntersectionObserver' in window) {
+    const observer = new IntersectionObserver(function(entries) {
+      entries.forEach(function(entry) {
+        if (entry.isIntersecting) {
+          observer.unobserve(entry.target);
+          if (!queue.includes(entry.target)) queue.push(entry.target);
+          pump();
+        }
+      });
+    }, {rootMargin: '500px'});
+    const initial = queue.splice(0, queue.length);
+    initial.forEach(function(img) { observer.observe(img); });
+  } else {
+    pump();
+  }
+})();
+</script>'''
+
+
 @router.get("/{project_id}/faces/gallery", response_class=HTMLResponse)
 def face_gallery(project_id: int, source_id: int | None = Query(None), dedup: str = Query("normal"), page_number: int = Query(1, alias="page", ge=1), session: Session = Depends(get_session)):
     project = session.get(Project, project_id)
@@ -120,7 +169,7 @@ def face_gallery(project_id: int, source_id: int | None = Query(None), dedup: st
             continue
         source_arg = f"&source_id={source_id}" if source_id is not None else ""
         quality = _face_quality(face)
-        cards.append(f'<div class="card"><a href="/projects/{project_id}/faces/{face.id}/matches?mode=recommended{source_arg}" title="Find similar photos"><img src="/media/faces/{face.id}" alt="Representative detected face" loading="lazy" style="width:100%;height:230px;object-fit:cover;border-radius:12px"></a><h3>{escape(photo.name)}</h3><p class="muted">Source: {escape(source.display_name or source.source_type)} · Quality: {quality:.2f}</p><p><a class="button" href="/projects/{project_id}/faces/{face.id}/matches?mode=recommended{source_arg}">Find Similar Photos</a></p><p><a class="button secondary" href="/media/photos/{photo.id}" target="_blank">View Photo</a> <a class="button secondary" href="/media/photos/{photo.id}/download">Download Original</a></p></div>')
+        cards.append(f'<div class="card"><a href="/projects/{project_id}/faces/{face.id}/matches?mode=recommended{source_arg}" title="Find similar photos"><img class="face-thumb" data-src="/media/faces/{face.id}" alt="Representative detected face" style="width:100%;height:230px;object-fit:cover;border-radius:12px;background:#e5e7eb"></a><h3>{escape(photo.name)}</h3><p class="muted">Source: {escape(source.display_name or source.source_type)} · Quality: {quality:.2f}</p><p><a class="button" href="/projects/{project_id}/faces/{face.id}/matches?mode=recommended{source_arg}">Find Similar Photos</a></p><p><a class="button secondary" href="/media/photos/{photo.id}" target="_blank">View Photo</a> <a class="button secondary" href="/media/photos/{photo.id}/download">Download Original</a></p></div>')
     def page_link(number, label):
         source_arg = f"&source_id={source_id}" if source_id is not None else ""
         return f'<a class="button secondary" href="/projects/{project_id}/faces/gallery?page={number}&dedup={dedup}{source_arg}">{label}</a>'
@@ -133,7 +182,7 @@ def face_gallery(project_id: int, source_id: int | None = Query(None), dedup: st
     options_html = _source_options(sources, source_id)
     dedup_html = _dedup_options(dedup)
     suppression_rate = (suppressed / total * 100.0) if total else 0.0
-    body = f'<div class="row" style="justify-content:space-between"><div><h1>Representative Faces Gallery</h1><p class="muted">{total} indexed face region(s) · {representative_total} temporary representative(s) · {suppressed} similar crop(s) suppressed ({suppression_rate:.1f}%). Dedup mode: {dedup.title()} · threshold {threshold:.2f}.</p></div><a class="button secondary" href="/ui/projects/{project_id}">Back to Project</a></div><div class="card"><form class="row" method="get" action="/projects/{project_id}/faces/gallery"><select name="source_id">{options_html}</select><select name="dedup">{dedup_html}</select><button type="submit">Apply Gallery Filter</button></form><p class="muted">Conservative keeps more representatives. Aggressive suppresses more visually similar crops. This changes display only; the indexed faces are untouched.</p></div>{nav}<div class="grid">{cards_html}</div>{nav}'
+    body = f'<div class="row" style="justify-content:space-between"><div><h1>Representative Faces Gallery</h1><p class="muted">{total} indexed face region(s) · {representative_total} temporary representative(s) · {suppressed} similar crop(s) suppressed ({suppression_rate:.1f}%). Dedup mode: {dedup.title()} · threshold {threshold:.2f}.</p></div><a class="button secondary" href="/ui/projects/{project_id}">Back to Project</a></div><div class="card"><form class="row" method="get" action="/projects/{project_id}/faces/gallery"><select name="source_id">{options_html}</select><select name="dedup">{dedup_html}</select><button type="submit">Apply Gallery Filter</button></form><p class="muted">Conservative keeps more representatives. Aggressive suppresses more visually similar crops. Thumbnails are loaded gradually to protect cloud sources from request bursts.</p></div>{nav}<div class="grid">{cards_html}</div>{nav}{THUMB_SCRIPT}'
     return page(f"{project.name} Faces", body)
 
 
