@@ -1,3 +1,4 @@
+import argparse
 import json
 import os
 import platform
@@ -30,8 +31,8 @@ def get(url: str):
     return urllib.request.urlopen(url, timeout=1)
 
 
-def main() -> None:
-    executable = executable_path()
+def smoke(executable: Path) -> None:
+    executable = executable.resolve()
     if not executable.exists():
         raise SystemExit(f"Packaged executable not found: {executable}")
     port = free_port()
@@ -66,7 +67,7 @@ def main() -> None:
                         if "activat" not in activation_html.lower():
                             raise RuntimeError("Activation page did not render expected activation content")
 
-                    print(f"Packaged application healthy, activation-gated, and first-run route verified: {base_url}")
+                    print(f"Application healthy, activation-gated, and first-run route verified: {executable}")
                     return
                 except RuntimeError:
                     raise
@@ -79,6 +80,13 @@ def main() -> None:
                 process.wait(timeout=10)
             except subprocess.TimeoutExpired:
                 process.kill()
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Smoke-test a packaged or installed Auroara Face Photo Finder executable")
+    parser.add_argument("--executable", type=Path, help="Path to an installed/package executable; defaults to the build output")
+    args = parser.parse_args()
+    smoke(args.executable or executable_path())
 
 
 if __name__ == "__main__":
