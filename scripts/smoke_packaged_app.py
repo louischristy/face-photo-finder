@@ -1,7 +1,7 @@
+import json
 import os
 import platform
 import subprocess
-import sys
 import tempfile
 import time
 import urllib.request
@@ -26,7 +26,6 @@ def main() -> None:
     with tempfile.TemporaryDirectory(prefix="auroara-fpf-smoke-") as temp_dir:
         env = os.environ.copy()
         env["AUROARA_DATA_DIR"] = temp_dir
-        env["AUROARA_DEV_BYPASS_LICENCE"] = "1"
         env["AUROARA_DESKTOP_PORT"] = str(PORT)
         env["AUROARA_NO_BROWSER"] = "1"
         process = subprocess.Popen([str(executable)], env=env)
@@ -38,15 +37,24 @@ def main() -> None:
                 try:
                     with urllib.request.urlopen(url, timeout=0.5) as response:
                         if response.status == 200:
-                            print(f"Packaged application healthy: {url}")
+                            payload = json.load(response)
+                            licence = payload.get("licence", {})
+                            if licence.get("active") is not False:
+                                raise RuntimeError("Fresh packaged app unexpectedly bypassed product activation")
+                            print(f"Packaged application healthy and activation-gated: {url}")
                             return
+                except RuntimeError:
+                    raise
                 except Exception:
                     time.sleep(0.25)
             raise RuntimeError("Packaged application did not become healthy")
         finally:
             process.terminate()
-            try: process.wait(timeout=10)
-            except subprocess.TimeoutExpired: process.kill()
+            try:
+                process.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                process.kill()
 
 
-if __name__ == "__main__": main()
+if __name__ == "__main__":
+    main()
