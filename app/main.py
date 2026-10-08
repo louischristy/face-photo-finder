@@ -2,11 +2,13 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.responses import RedirectResponse
+from sqlalchemy import func, select
 
 from app.branding import APP_NAME
-from app.database import engine
-from app.models import Base
+from app.database import SessionLocal, engine
+from app.models import Base, User
 from app.routes.accounts import router as accounts_router
+from app.routes.auth import router as auth_router
 from app.routes.brand import router as brand_router
 from app.routes.faces import router as faces_router
 from app.routes.gallery import router as gallery_router
@@ -24,6 +26,7 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(title=APP_NAME, version="0.7.0", lifespan=lifespan)
+app.include_router(auth_router)
 app.include_router(accounts_router)
 app.include_router(projects_router)
 app.include_router(search_router)
@@ -43,4 +46,6 @@ def health():
 
 @app.get("/")
 def home():
-    return RedirectResponse("/ui/projects", status_code=307)
+    with SessionLocal() as session:
+        users = session.scalar(select(func.count(User.id))) or 0
+    return RedirectResponse("/login" if users else "/setup", status_code=307)
