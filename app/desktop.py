@@ -1,9 +1,21 @@
 import os
 import socket
+import sys
 import threading
 import time
 import urllib.request
 import webbrowser
+
+# PyInstaller's Windows windowed bootloader deliberately sets stdout/stderr to
+# None. Uvicorn's logging setup expects file-like streams, so provide harmless
+# sinks before importing/configuring Uvicorn. This keeps the release executable
+# console-free without leaving startup failures behind a Windows error dialog.
+_devnull_streams = []
+for stream_name in ("stdout", "stderr"):
+    if getattr(sys, stream_name) is None:
+        stream = open(os.devnull, "w", encoding="utf-8")
+        _devnull_streams.append(stream)
+        setattr(sys, stream_name, stream)
 
 import uvicorn
 
