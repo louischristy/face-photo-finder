@@ -4,8 +4,8 @@ import os
 import tempfile
 import zipfile
 
-from fastapi import APIRouter, Depends, HTTPException, Query
-from fastapi.responses import FileResponse, Response, StreamingResponse
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
+from fastapi.responses import FileResponse, Response
 from pillow_heif import register_heif_opener
 from PIL import Image, ImageOps
 from sqlalchemy.orm import Session
@@ -19,6 +19,7 @@ register_heif_opener()
 router = APIRouter(prefix="/media", tags=["media"])
 bulk_router = APIRouter(prefix="/projects", tags=["media"])
 CACHE_ROOT = Path("data/cache/previews")
+BULK_TEMP_ROOT = Path("data/temp/downloads")
 
 
 def _resolve_photo(photo_id: int, session: Session):
@@ -102,6 +103,13 @@ def _safe_zip_name(name: str, photo_id: int, used: set[str]) -> str:
     return candidate
 
 
+def _remove_temp_file(path: str) -> None:
+    try:
+        os.unlink(path)
+    except FileNotFoundError:
+        pass
+
+
 @router.get("/faces/{face_id}")
 def preview_face(face_id: int, session: Session = Depends(get_session)):
     face = session.get(Face, face_id)
@@ -179,7 +187,7 @@ def download_photo(photo_id: int, session: Session = Depends(get_session)):
 
 
 @bulk_router.get("/{project_id}/faces/{face_id}/matches/download")
-def download_face_matches(project_id: int, face_id: int, source_id: int | None = Query(None), mode: str = Query("recommended"), session: Session = Depends(get_session)):
+def download_face_matches(project_id: int, face_id: int, background_tasks: BackgroundTasks, source_id: int | None = Query(None), mode: str = Query("recommended"), session: Session = Depends(get_session)):
     project = session.get(Project, project_id)
     if not project:
         raise HTTPException(404, "Project not found")
@@ -203,21 +211,36 @@ def download_face_matches(project_id: int, face_id: int, source_id: int | None =
             photo_ids.append(face.photo_id)
     if not photo_ids:
         raise HTTPException(404, "No matched photos to download")
-    archive = BytesIO()
+
+    BULK_TEMP_ROOT.mkdir(parents=True, exist_ok=True)
+    fd, temp_name = tempfile.mkstemp(prefix=f"face-{face_id}-{mode}-", suffix=".zip", dir=str(BULK_TEMP_ROOT))
+    os.close(fd)
     used_names: set[str] = set()
     failures = []
-    with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as bundle:
-        for photo_id in photo_ids:
-            photo, source = _resolve_photo(photo_id, session)
-            try:
-                data = _original_bytes(session, photo, source)
-                bundle.writestr(_safe_zip_name(photo.name, photo.id, used_names), data)
-            except HTTPException as exc:
-                failures.append(f"{photo.name}: {exc.detail}")
-        if failures:
-            bundle.writestr("download-errors.txt", "Some originals could not be retrieved:\n\n" + "\n".join(failures))
-    archive.seek(0)
+    try:
+        with zipfile.ZipFile(temp_name, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6, allowZip64=True) as bundle:
+            for photo_id in photo_ids:
+                photo, source = _resolve_photo(photo_id, session)
+                try:
+                    if source.source_type == "local_folder":
+                        path = local_photo_path(source, photo)
+                        bundle.write(path, arcname=_safe_zip_name(photo.name, photo.id, used_names))
+                    elif source.source_type == "google_drive":
+                        data = _drive_bytes(session, source, photo)
+                        bundle.writestr(_safe_zip_name(photo.name, photo.id, used_names), data)
+                        del data
+                    else:
+                        failures.append(f"{photo.name}: unsupported storage provider")
+                except (HTTPException, FileNotFoundError, ValueError) as exc:
+                    detail = exc.detail if isinstance(exc, HTTPException) else str(exc)
+                    failures.append(f"{photo.name}: {detail}")
+            if failures:
+                bundle.writestr("download-errors.txt", "Some originals could not be retrieved:\n\n" + "\n".join(failures))
+    except Exception:
+        _remove_temp_file(temp_name)
+        raise
+
     safe_project = "".join(ch if ch.isalnum() or ch in "-_" else "-" for ch in project.name).strip("-") or f"project-{project_id}"
     filename = f"{safe_project}-face-{face_id}-{mode}-matches.zip"
-    headers = {"Content-Disposition": f'attachment; filename="{filename}"', "Cache-Control": "no-store"}
-    return StreamingResponse(archive, media_type="application/zip", headers=headers)
+    background_tasks.add_task(_remove_temp_file, temp_name)
+    return FileResponse(temp_name, media_type="application/zip", filename=filename, headers={"Cache-Control": "no-store"}, background=background_tasks)
