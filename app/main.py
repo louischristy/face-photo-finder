@@ -1,9 +1,10 @@
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.responses import RedirectResponse
 from sqlalchemy import func, select
 
+from app.auth import require_user
 from app.branding import APP_NAME
 from app.database import SessionLocal, engine
 from app.models import Base, User
@@ -31,11 +32,11 @@ app.include_router(accounts_router)
 app.include_router(projects_router)
 app.include_router(search_router)
 app.include_router(faces_router)
-app.include_router(gallery_router)
+app.include_router(gallery_router, dependencies=[Depends(require_user)])
 app.include_router(media_router)
 app.include_router(bulk_media_router)
 app.include_router(brand_router)
-app.include_router(ui_router)
+app.include_router(ui_router, dependencies=[Depends(require_user)])
 
 
 @app.get("/health")
