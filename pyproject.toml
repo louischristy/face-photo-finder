@@ -19,7 +19,8 @@ dependencies = [
   "numpy>=2,<3",
   "opencv-python-headless>=4.10,<5",
   "scikit-learn>=1.5,<2",
-  "argon2-cffi>=23.1,<26"
+  "argon2-cffi>=23.1,<26",
+  "cryptography>=43,<47"
 ]
 
 [project.optional-dependencies]
