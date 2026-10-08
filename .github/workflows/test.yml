@@ -55,3 +55,11 @@ jobs:
         run: python scripts/build_desktop.py
       - name: Smoke test packaged application
         run: python scripts/smoke_packaged_app.py
+      - name: Build macOS DMG
+        if: runner.os == 'macOS'
+        run: python scripts/build_macos_dmg.py
+      - name: Validate macOS DMG
+        if: runner.os == 'macOS'
+        run: |
+          test -s "dist/Auroara-Face-Photo-Finder-0.7.0.dmg"
+          hdiutil verify "dist/Auroara-Face-Photo-Finder-0.7.0.dmg"
