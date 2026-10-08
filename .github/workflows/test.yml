@@ -58,11 +58,22 @@ jobs:
       - name: Build macOS DMG
         if: runner.os == 'macOS'
         run: python scripts/build_macos_dmg.py
-      - name: Validate macOS DMG
+      - name: Validate and smoke test macOS DMG
         if: runner.os == 'macOS'
+        shell: bash
         run: |
-          test -s "dist/Auroara-Face-Photo-Finder-0.7.0.dmg"
-          hdiutil verify "dist/Auroara-Face-Photo-Finder-0.7.0.dmg"
+          set -euo pipefail
+          DMG="dist/Auroara-Face-Photo-Finder-0.7.0.dmg"
+          test -s "$DMG"
+          hdiutil verify "$DMG"
+          MOUNT="$(mktemp -d)"
+          hdiutil attach "$DMG" -nobrowse -readonly -mountpoint "$MOUNT"
+          trap 'hdiutil detach "$MOUNT" -force || true; rmdir "$MOUNT" || true' EXIT
+          test -d "$MOUNT/Auroara Face Photo Finder.app"
+          python scripts/smoke_packaged_app.py --executable "$MOUNT/Auroara Face Photo Finder.app/Contents/MacOS/Auroara Face Photo Finder"
+          hdiutil detach "$MOUNT"
+          trap - EXIT
+          rmdir "$MOUNT"
       - name: Build Windows installer
         if: runner.os == 'Windows'
         shell: pwsh
@@ -71,10 +82,21 @@ jobs:
           if (-not (Test-Path $iscc)) { throw "Inno Setup compiler not found: $iscc" }
           & $iscc 'packaging\windows\AuroaraFacePhotoFinder.iss'
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Validate Windows installer
+      - name: Install and smoke test Windows installer
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $installer = 'dist\installer\Auroara-Face-Photo-Finder-0.7.0-Setup.exe'
-          if (-not (Test-Path $installer)) { throw "Installer not found: $installer" }
+          $installer = (Resolve-Path 'dist\installer\Auroara-Face-Photo-Finder-0.7.0-Setup.exe').Path
           if ((Get-Item $installer).Length -le 0) { throw 'Installer is empty' }
+          $installDir = Join-Path $env:RUNNER_TEMP 'AuroaraFacePhotoFinderInstalled'
+          & $installer /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP- /DIR="$installDir"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $exe = Join-Path $installDir 'Auroara Face Photo Finder.exe'
+          if (-not (Test-Path $exe)) { throw "Installed executable not found: $exe" }
+          python scripts/smoke_packaged_app.py --executable "$exe"
+          $uninstaller = Join-Path $installDir 'unins000.exe'
+          if (-not (Test-Path $uninstaller)) { throw "Uninstaller not found: $uninstaller" }
+          & $uninstaller /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Start-Sleep -Seconds 2
+          if (Test-Path $exe) { throw 'Installed executable remained after uninstall' }
