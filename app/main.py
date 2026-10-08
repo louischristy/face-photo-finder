@@ -1,7 +1,7 @@
 from contextlib import asynccontextmanager
 
-from fastapi import Depends, FastAPI, Request
-from fastapi.responses import RedirectResponse
+from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse, RedirectResponse
 from sqlalchemy import func, select
 
 from app.auth import SESSION_COOKIE, require_user
@@ -41,7 +41,10 @@ async def activation_and_csrf_middleware(request: Request, call_next):
     activation_allowed = path == "/activate" or path.startswith("/brand/") or path == "/health"
     if not status.active and not activation_allowed:
         return RedirectResponse("/activate", status_code=303)
-    await enforce_csrf(request)
+    try:
+        await enforce_csrf(request)
+    except HTTPException as exc:
+        return JSONResponse({"detail": exc.detail}, status_code=exc.status_code, headers=exc.headers)
     response = await call_next(request)
     session_token = request.cookies.get(SESSION_COOKIE)
     if session_token:
