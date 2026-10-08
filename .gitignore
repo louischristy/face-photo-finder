@@ -17,3 +17,10 @@ build/
 *.spec
 .DS_Store
 Thumbs.db
+
+# Auroara licensing secrets and generated licence material
+*.private.key
+*.private.pem
+*.licence
+licence.json
+resources/licensing/private/
