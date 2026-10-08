@@ -4,11 +4,12 @@ import os
 import tempfile
 import zipfile
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse, Response
 from pillow_heif import register_heif_opener
 from PIL import Image, ImageOps
 from sqlalchemy.orm import Session
+from starlette.background import BackgroundTask
 
 from app.database import get_session
 from app.models import Face, Photo, PhotoSource, Project
@@ -187,7 +188,7 @@ def download_photo(photo_id: int, session: Session = Depends(get_session)):
 
 
 @bulk_router.get("/{project_id}/faces/{face_id}/matches/download")
-def download_face_matches(project_id: int, face_id: int, background_tasks: BackgroundTasks, source_id: int | None = Query(None), mode: str = Query("recommended"), session: Session = Depends(get_session)):
+def download_face_matches(project_id: int, face_id: int, source_id: int | None = Query(None), mode: str = Query("recommended"), session: Session = Depends(get_session)):
     project = session.get(Project, project_id)
     if not project:
         raise HTTPException(404, "Project not found")
@@ -242,5 +243,5 @@ def download_face_matches(project_id: int, face_id: int, background_tasks: Backg
 
     safe_project = "".join(ch if ch.isalnum() or ch in "-_" else "-" for ch in project.name).strip("-") or f"project-{project_id}"
     filename = f"{safe_project}-face-{face_id}-{mode}-matches.zip"
-    background_tasks.add_task(_remove_temp_file, temp_name)
-    return FileResponse(temp_name, media_type="application/zip", filename=filename, headers={"Cache-Control": "no-store"}, background=background_tasks)
+    cleanup = BackgroundTask(_remove_temp_file, temp_name)
+    return FileResponse(temp_name, media_type="application/zip", filename=filename, headers={"Cache-Control": "no-store"}, background=cleanup)
