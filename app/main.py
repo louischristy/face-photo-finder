@@ -9,6 +9,7 @@ from app.branding import APP_NAME
 from app.database import SessionLocal, engine
 from app.models import Base, User
 from app.routes.accounts import router as accounts_router
+from app.routes.admin_users import router as admin_users_router
 from app.routes.auth import router as auth_router
 from app.routes.brand import router as brand_router
 from app.routes.faces import router as faces_router
@@ -36,6 +37,7 @@ app.include_router(gallery_router, dependencies=[Depends(require_user)])
 app.include_router(media_router)
 app.include_router(bulk_media_router)
 app.include_router(brand_router)
+app.include_router(admin_users_router)
 app.include_router(ui_router, dependencies=[Depends(require_user)])
 
 
