@@ -5,7 +5,7 @@ from pathlib import Path
 import cv2 as cv
 import numpy as np
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from pillow_heif import register_heif_opener
 from PIL import Image, ImageOps
 from sqlalchemy import select
@@ -14,8 +14,8 @@ from sqlalchemy.orm import Session
 from app.database import get_session
 from app.models import Photo, PhotoSource, Project
 from app.services.face_engine import OpenCVFaceEngine
-from app.services.face_indexer import index_pending_local_photos
 from app.services.face_matching import find_similar_faces
+from app.services.index_jobs import cancel_index_job, get_index_job, start_index_job
 from app.ui import page
 
 register_heif_opener()
@@ -42,20 +42,38 @@ def _decode_reference(data: bytes) -> np.ndarray:
         raise HTTPException(400, "Reference image could not be read") from exc
 
 
-@router.post("/{project_id}/faces/index")
-def index_faces(project_id: int, source_ids: list[int] | None = Form(None), session: Session = Depends(get_session)):
+def _validated_sources(session: Session, project_id: int, source_ids: list[int] | None) -> tuple[int, ...]:
     if not session.get(Project, project_id):
         raise HTTPException(404, "Project not found")
     allowed = set(session.scalars(select(PhotoSource.id).where(PhotoSource.project_id == project_id)).all())
     selected = tuple(dict.fromkeys(source_ids or []))
     if set(selected) - allowed:
         raise HTTPException(400, "Selected source does not belong to this project")
-    result = index_pending_local_photos(session, project_id, _engine(), selected)
-    return RedirectResponse(f"/ui/projects/{project_id}?indexed={result['processed']}&faces={result['faces']}&failed={result['failed']}", status_code=303)
+    return selected
+
+
+@router.post("/{project_id}/faces/index")
+def index_faces(project_id: int, source_ids: list[int] | None = Form(None), session: Session = Depends(get_session)):
+    selected = _validated_sources(session, project_id, source_ids)
+    return JSONResponse(start_index_job(project_id, selected, DETECTOR, RECOGNIZER), status_code=202)
+
+
+@router.get("/{project_id}/faces/index/status")
+def index_faces_status(project_id: int, session: Session = Depends(get_session)):
+    if not session.get(Project, project_id):
+        raise HTTPException(404, "Project not found")
+    return get_index_job(project_id) or {"project_id": project_id, "status": "idle", "running": False, "percent": 0.0}
+
+
+@router.post("/{project_id}/faces/index/cancel")
+def index_faces_cancel(project_id: int, session: Session = Depends(get_session)):
+    if not session.get(Project, project_id):
+        raise HTTPException(404, "Project not found")
+    return {"cancel_requested": cancel_index_job(project_id)}
 
 
 @router.post("/{project_id}/faces/search", response_class=HTMLResponse)
-async def search_faces(project_id: int, reference: UploadFile = File(...), mode: str = Form("balanced"), source_ids: list[int] | None = Form(None), session: Session = Depends(get_session)):
+async def search_faces(project_id: int, reference: UploadFile = File(...), mode: str = Form("recommended"), source_ids: list[int] | None = Form(None), session: Session = Depends(get_session)):
     project = session.get(Project, project_id)
     if not project:
         raise HTTPException(404, "Project not found")
