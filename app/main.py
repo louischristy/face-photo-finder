@@ -1,11 +1,12 @@
 from contextlib import asynccontextmanager
 
-from fastapi import Depends, FastAPI
+from fastapi import Depends, FastAPI, Request
 from fastapi.responses import RedirectResponse
 from sqlalchemy import func, select
 
-from app.auth import require_user
+from app.auth import SESSION_COOKIE, require_user
 from app.branding import APP_NAME
+from app.csrf import csrf_token, enforce_csrf
 from app.database import SessionLocal, engine
 from app.models import Base, User
 from app.routes.accounts import router as accounts_router
@@ -29,6 +30,20 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(title=APP_NAME, version="0.7.0", lifespan=lifespan)
+
+
+@app.middleware("http")
+async def csrf_middleware(request: Request, call_next):
+    await enforce_csrf(request)
+    response = await call_next(request)
+    session_token = request.cookies.get(SESSION_COOKIE)
+    if session_token:
+        response.set_cookie("auroara_fpf_csrf", csrf_token(session_token), max_age=12 * 60 * 60, httponly=False, samesite="strict", secure=False, path="/")
+    else:
+        response.delete_cookie("auroara_fpf_csrf", path="/")
+    return response
+
+
 app.include_router(auth_router)
 app.include_router(accounts_router)
 app.include_router(projects_router)
