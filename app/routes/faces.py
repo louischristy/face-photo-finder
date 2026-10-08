@@ -72,7 +72,7 @@ def index_faces_cancel(project_id: int, session: Session = Depends(get_session),
 
 
 @router.post("/{project_id}/faces/search", response_class=HTMLResponse)
-async def search_faces(project_id: int, reference: UploadFile = File(...), mode: str = Form(""), source_ids: list[int] | None = Form(None), session: Session = Depends(get_session), user: User = Depends(require_user)):
+async def search_faces(project_id: int, reference: UploadFile | None = File(None), selfie_reference: UploadFile | None = File(None), mode: str = Form(""), source_ids: list[int] | None = Form(None), session: Session = Depends(get_session), user: User = Depends(require_user)):
     project = session.get(Project, project_id)
     if not project: raise HTTPException(404, "Project not found")
     if not mode:
@@ -80,10 +80,16 @@ async def search_faces(project_id: int, reference: UploadFile = File(...), mode:
     if mode not in SEARCH_THRESHOLDS:
         raise HTTPException(400, "Invalid search mode")
     selected = _validated_sources(session, project_id, source_ids)
+    upload = selfie_reference or reference
+    if upload is None:
+        raise HTTPException(400, "Take a selfie or choose a reference photo first")
     try:
-        data = await reference.read(MAX_REFERENCE_BYTES + 1)
+        data = await upload.read(MAX_REFERENCE_BYTES + 1)
     finally:
-        await reference.close()
+        await upload.close()
+        other = reference if upload is selfie_reference else selfie_reference
+        if other is not None:
+            await other.close()
     if not data: raise HTTPException(400, "Reference image is empty")
     if len(data) > MAX_REFERENCE_BYTES: raise HTTPException(413, "Reference image is too large")
     detected = _engine().detect_and_embed(_decode_reference(data))
