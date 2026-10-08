@@ -1,10 +1,9 @@
-from pathlib import Path
-
 from sqlalchemy import create_engine
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.orm import sessionmaker
 
-DATA_DIR = Path("data")
-DATA_DIR.mkdir(exist_ok=True)
+from app.runtime import application_data_dir
+
+DATA_DIR = application_data_dir()
 DATABASE_URL = f"sqlite:///{DATA_DIR / 'face_photo_finder.sqlite3'}"
 
 engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
