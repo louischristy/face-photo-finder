@@ -3,9 +3,11 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.responses import RedirectResponse
 
+from app.branding import APP_NAME
 from app.database import engine
 from app.models import Base
 from app.routes.accounts import router as accounts_router
+from app.routes.brand import router as brand_router
 from app.routes.faces import router as faces_router
 from app.routes.gallery import router as gallery_router
 from app.routes.media import bulk_router as bulk_media_router, router as media_router
@@ -21,7 +23,7 @@ async def lifespan(_: FastAPI):
     yield
 
 
-app = FastAPI(title="Face Photo Finder", version="0.7.0", lifespan=lifespan)
+app = FastAPI(title=APP_NAME, version="0.7.0", lifespan=lifespan)
 app.include_router(accounts_router)
 app.include_router(projects_router)
 app.include_router(search_router)
@@ -29,6 +31,7 @@ app.include_router(faces_router)
 app.include_router(gallery_router)
 app.include_router(media_router)
 app.include_router(bulk_media_router)
+app.include_router(brand_router)
 app.include_router(ui_router)
 
 
