@@ -92,9 +92,16 @@ def _ordered_photo_matches(session: Session, project_id: int, reference_face: Fa
 
 THUMB_SCRIPT = '''<script>
 (function() {
-  const queue = Array.from(document.querySelectorAll('img.face-thumb[data-src]'));
+  const waiting = new Set(Array.from(document.querySelectorAll('img.resilient-media[data-src]')));
+  const queue = [];
   let active = 0;
   const limit = 4;
+  function enqueue(img) {
+    if (!waiting.has(img)) return;
+    waiting.delete(img);
+    queue.push(img);
+    pump();
+  }
   function pump() {
     while (active < limit && queue.length) {
       const img = queue.shift();
@@ -102,7 +109,11 @@ THUMB_SCRIPT = '''<script>
       let attempt = 0;
       const load = function() {
         attempt++;
-        img.onload = function() { active--; pump(); };
+        img.onload = function() {
+          img.style.opacity = '1';
+          active--;
+          pump();
+        };
         img.onerror = function() {
           if (attempt < 3) {
             setTimeout(load, attempt * 1200);
@@ -125,18 +136,21 @@ THUMB_SCRIPT = '''<script>
       entries.forEach(function(entry) {
         if (entry.isIntersecting) {
           observer.unobserve(entry.target);
-          if (!queue.includes(entry.target)) queue.push(entry.target);
-          pump();
+          enqueue(entry.target);
         }
       });
-    }, {rootMargin: '500px'});
-    const initial = queue.splice(0, queue.length);
-    initial.forEach(function(img) { observer.observe(img); });
+    }, {rootMargin: '600px'});
+    waiting.forEach(function(img) { observer.observe(img); });
   } else {
-    pump();
+    Array.from(waiting).forEach(enqueue);
   }
 })();
 </script>'''
+
+
+def _resilient_img(src: str, alt: str, style: str, extra_class: str = "") -> str:
+    css = f"resilient-media {extra_class}".strip()
+    return f'<img class="{css}" data-src="{src}" alt="{escape(alt)}" style="{style};background:#e5e7eb;opacity:.92">'
 
 
 @router.get("/{project_id}/faces/gallery", response_class=HTMLResponse)
@@ -169,7 +183,8 @@ def face_gallery(project_id: int, source_id: int | None = Query(None), dedup: st
             continue
         source_arg = f"&source_id={source_id}" if source_id is not None else ""
         quality = _face_quality(face)
-        cards.append(f'<div class="card"><a href="/projects/{project_id}/faces/{face.id}/matches?mode=recommended{source_arg}" title="Find similar photos"><img class="face-thumb" data-src="/media/faces/{face.id}" alt="Representative detected face" style="width:100%;height:230px;object-fit:cover;border-radius:12px;background:#e5e7eb"></a><h3>{escape(photo.name)}</h3><p class="muted">Source: {escape(source.display_name or source.source_type)} · Quality: {quality:.2f}</p><p><a class="button" href="/projects/{project_id}/faces/{face.id}/matches?mode=recommended{source_arg}">Find Similar Photos</a></p><p><a class="button secondary" href="/media/photos/{photo.id}" target="_blank">View Photo</a> <a class="button secondary" href="/media/photos/{photo.id}/download">Download Original</a></p></div>')
+        thumb = _resilient_img(f"/media/faces/{face.id}", "Representative detected face", "width:100%;height:230px;object-fit:cover;border-radius:12px")
+        cards.append(f'<div class="card"><a href="/projects/{project_id}/faces/{face.id}/matches?mode=recommended{source_arg}" title="Find similar photos">{thumb}</a><h3>{escape(photo.name)}</h3><p class="muted">Source: {escape(source.display_name or source.source_type)} · Quality: {quality:.2f}</p><p><a class="button" href="/projects/{project_id}/faces/{face.id}/matches?mode=recommended{source_arg}">Find Similar Photos</a></p><p><a class="button secondary" href="/media/photos/{photo.id}" target="_blank">View Photo</a> <a class="button secondary" href="/media/photos/{photo.id}/download">Download Original</a></p></div>')
     def page_link(number, label):
         source_arg = f"&source_id={source_id}" if source_id is not None else ""
         return f'<a class="button secondary" href="/projects/{project_id}/faces/gallery?page={number}&dedup={dedup}{source_arg}">{label}</a>'
@@ -207,7 +222,9 @@ def face_matches(project_id: int, face_id: int, source_id: int | None = Query(No
             continue
         quality = _face_quality(face)
         margin = score - SEARCH_THRESHOLDS[mode]
-        cards.append(f'<div class="card"><div class="row" style="align-items:flex-start"><img src="/media/faces/{face.id}" alt="Matched face crop" loading="lazy" style="width:110px;height:110px;object-fit:cover;border-radius:12px"><div><strong>Result #{rank}</strong><p class="muted">Similarity: {score:.3f}<br>Threshold: {SEARCH_THRESHOLDS[mode]:.2f}<br>Margin: +{margin:.3f}<br>Crop quality: {quality:.2f}</p></div></div><img src="/media/photos/{photo.id}" alt="{escape(photo.name)}" loading="lazy" style="width:100%;height:260px;object-fit:cover;border-radius:12px;margin-top:10px"><h3>{escape(photo.name)}</h3><p class="muted">Source: {escape(source.display_name or source.source_type)}</p><p><a class="button" href="/media/photos/{photo.id}" target="_blank">View Photo</a> <a class="button secondary" href="/media/photos/{photo.id}/download">Download Original</a></p></div>')
+        crop = _resilient_img(f"/media/faces/{face.id}", "Matched face crop", "width:110px;height:110px;object-fit:cover;border-radius:12px")
+        preview = _resilient_img(f"/media/photos/{photo.id}", photo.name, "width:100%;height:260px;object-fit:cover;border-radius:12px;margin-top:10px")
+        cards.append(f'<div class="card"><div class="row" style="align-items:flex-start">{crop}<div><strong>Result #{rank}</strong><p class="muted">Similarity: {score:.3f}<br>Threshold: {SEARCH_THRESHOLDS[mode]:.2f}<br>Margin: +{margin:.3f}<br>Crop quality: {quality:.2f}</p></div></div>{preview}<h3>{escape(photo.name)}</h3><p class="muted">Source: {escape(source.display_name or source.source_type)}</p><p><a class="button" href="/media/photos/{photo.id}" target="_blank">View Photo</a> <a class="button secondary" href="/media/photos/{photo.id}/download">Download Original</a></p></div>')
     source_arg = f"&source_id={source_id}" if source_id is not None else ""
     links = []
     for name in ("strict", "recommended", "balanced", "broad"):
@@ -226,5 +243,6 @@ def face_matches(project_id: int, face_id: int, source_id: int | None = Query(No
         score_summary = f'Highest {max(scores):.3f} · Lowest {min(scores):.3f} · Active threshold {SEARCH_THRESHOLDS[mode]:.2f}'
     else:
         score_summary = f'No results at active threshold {SEARCH_THRESHOLDS[mode]:.2f}'
-    body = f'<div class="row" style="justify-content:space-between"><div><h1>Similar Photo Search</h1><p class="muted">Using the selected detected face as a temporary reference. Similarity is a ranking signal, not an identity probability.</p></div><a class="button secondary" href="/projects/{project_id}/faces/gallery{back_arg}">Back to Faces</a></div><div class="card"><div class="row"><img src="/media/faces/{face_id}" alt="Selected face" style="width:120px;height:120px;object-fit:cover;border-radius:12px"><div><h3>Selected reference face</h3><p>{len(ordered)} photo result(s)<br><span class="muted">{score_summary}</span></p><div class="row">{mode_links}</div><p>{bulk_button}</p></div></div></div><div class="grid">{cards_html}</div>'
+    reference_img = _resilient_img(f"/media/faces/{face_id}", "Selected face", "width:120px;height:120px;object-fit:cover;border-radius:12px")
+    body = f'<div class="row" style="justify-content:space-between"><div><h1>Similar Photo Search</h1><p class="muted">Using the selected detected face as a temporary reference. Similarity is a ranking signal, not an identity probability.</p></div><a class="button secondary" href="/projects/{project_id}/faces/gallery{back_arg}">Back to Faces</a></div><div class="card"><div class="row">{reference_img}<div><h3>Selected reference face</h3><p>{len(ordered)} photo result(s)<br><span class="muted">{score_summary}</span></p><div class="row">{mode_links}</div><p>{bulk_button}</p></div></div></div><div class="grid">{cards_html}</div>{THUMB_SCRIPT}'
     return page(f"{project.name} Similar Photos", body)
