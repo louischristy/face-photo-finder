@@ -167,7 +167,10 @@ def face_matches(project_id: int, face_id: int, source_id: int | None = Query(No
     mode_links = " ".join(links)
     back_arg = f"?source_id={source_id}" if source_id is not None else ""
     download_url = f'/projects/{project_id}/faces/{face_id}/matches/download?mode={mode}{source_arg}'
-    bulk_button = f'<a class="button" href="{download_url}">Download All {len(ordered)} Originals (.zip)</a>' if ordered else ""
+    if ordered:
+        bulk_button = f'<a class="button" href="{download_url}" onclick="if(this.dataset.busy)return false;this.dataset.busy=\'1\';this.textContent=\'Preparing {len(ordered)} originals... Please wait\';this.style.pointerEvents=\'none\';this.style.opacity=\'0.65\';document.getElementById(\'bulk-status\').style.display=\'inline\';return true;">Download All {len(ordered)} Originals (.zip)</a> <span id="bulk-status" class="muted" style="display:none">Retrieving originals and building the ZIP. The download will start automatically.</span>'
+    else:
+        bulk_button = ""
     cards_html = "".join(cards) or EMPTY_MATCHES
     if ordered:
         scores = [score for _, score in ordered]
