@@ -32,3 +32,26 @@ jobs:
         run: python scripts/smoke_face_engine.py
       - name: Application smoke test
         run: python -c "from app.main import app; from app.services.diagnostics import system_diagnostics; d=system_diagnostics(); print(app.title, app.version, d); assert d['ready']"
+
+  package-smoke:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install packaging dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e .[packaging]
+      - name: Install face models
+        run: python scripts/install_models.py
+      - name: Build desktop application
+        run: python scripts/build_desktop.py
+      - name: Smoke test packaged application
+        run: python scripts/smoke_packaged_app.py
