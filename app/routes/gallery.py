@@ -92,10 +92,7 @@ def _ordered_photo_matches(session: Session, project_id: int, reference_face: Fa
 
 def _photo_matches_and_mode_counts(session: Session, project_id: int, reference_face: Face, source_id: int | None, active_mode: str):
     broad_matches = _ordered_photo_matches(session, project_id, reference_face, source_id, "broad")
-    counts = {
-        name: sum(1 for _, score in broad_matches if score >= threshold)
-        for name, threshold in SEARCH_THRESHOLDS.items()
-    }
+    counts = {name: sum(1 for _, score in broad_matches if score >= threshold) for name, threshold in SEARCH_THRESHOLDS.items()}
     active_threshold = SEARCH_THRESHOLDS[active_mode]
     active_matches = [(face, score) for face, score in broad_matches if score >= active_threshold]
     return active_matches, counts
@@ -107,17 +104,10 @@ THUMB_SCRIPT = '''<script>
   const queue = [];
   let active = 0;
   const limit = 4;
-  function enqueue(img) {
-    if (!waiting.has(img)) return;
-    waiting.delete(img);
-    queue.push(img);
-    pump();
-  }
+  function enqueue(img) { if (!waiting.has(img)) return; waiting.delete(img); queue.push(img); pump(); }
   function pump() {
     while (active < limit && queue.length) {
-      const img = queue.shift();
-      active++;
-      let attempt = 0;
+      const img = queue.shift(); active++; let attempt = 0;
       const load = function() {
         attempt++;
         img.onload = function() { img.style.opacity = '1'; active--; pump(); };
@@ -132,11 +122,7 @@ THUMB_SCRIPT = '''<script>
     }
   }
   if ('IntersectionObserver' in window) {
-    const observer = new IntersectionObserver(function(entries) {
-      entries.forEach(function(entry) {
-        if (entry.isIntersecting) { observer.unobserve(entry.target); enqueue(entry.target); }
-      });
-    }, {rootMargin: '600px'});
+    const observer = new IntersectionObserver(function(entries) { entries.forEach(function(entry) { if (entry.isIntersecting) { observer.unobserve(entry.target); enqueue(entry.target); } }); }, {rootMargin: '600px'});
     waiting.forEach(function(img) { observer.observe(img); });
   } else Array.from(waiting).forEach(enqueue);
 })();
@@ -226,11 +212,11 @@ def face_matches(project_id: int, face_id: int, source_id: int | None = Query(No
         css_class = "button" if name == mode else "button secondary"
         count = mode_counts[name]
         links.append(f'<a class="{css_class}" href="/projects/{project_id}/faces/{face_id}/matches?mode={name}{source_arg}">{name.title()} ({SEARCH_THRESHOLDS[name]:.2f}) — {count} photo(s)</a>')
-    mode_links = " ".join(links)
+    mode_links = "".join(links)
     back_arg = f"?source_id={source_id}" if source_id is not None else ""
     download_url = f'/projects/{project_id}/faces/{face_id}/matches/download?mode={mode}{source_arg}'
     if ordered:
-        bulk_button = f'<a class="button" href="{download_url}" onclick="if(this.dataset.busy)return false;this.dataset.busy=\'1\';this.textContent=\'Preparing {len(ordered)} originals... Please wait\';this.style.pointerEvents=\'none\';this.style.opacity=\'0.65\';document.getElementById(\'bulk-status\').style.display=\'inline\';return true;">Download All {len(ordered)} Originals (.zip)</a> <span id="bulk-status" class="muted" style="display:none">Retrieving originals and building the ZIP. The download will start automatically.</span>'
+        bulk_button = f'<a class="button" style="width:100%;text-align:center" href="{download_url}" onclick="if(this.dataset.busy)return false;this.dataset.busy=\'1\';this.textContent=\'Preparing {len(ordered)} originals... Please wait\';this.style.pointerEvents=\'none\';this.style.opacity=\'0.65\';document.getElementById(\'bulk-status\').style.display=\'block\';return true;">Download All {len(ordered)} Originals (.zip)</a><span id="bulk-status" class="muted" style="display:none;margin-top:8px">Retrieving originals and building the ZIP. The download will start automatically.</span>'
     else:
         bulk_button = ""
     cards_html = "".join(cards) or EMPTY_MATCHES
@@ -239,6 +225,8 @@ def face_matches(project_id: int, face_id: int, source_id: int | None = Query(No
         score_summary = f'Highest {max(scores):.3f} · Lowest {min(scores):.3f} · Active threshold {SEARCH_THRESHOLDS[mode]:.2f}'
     else:
         score_summary = f'No results at active threshold {SEARCH_THRESHOLDS[mode]:.2f}'
-    reference_img = _resilient_img(f"/media/faces/{face_id}", "Selected face", "width:120px;height:120px;object-fit:cover;border-radius:12px")
-    body = f'<div class="row" style="justify-content:space-between"><div><h1>Similar Photo Search</h1><p class="muted">Using the selected detected face as a temporary reference. Similarity is a ranking signal, not an identity probability.</p></div><a class="button secondary" href="/projects/{project_id}/faces/gallery{back_arg}">Back to Faces</a></div><div class="card"><div class="row">{reference_img}<div><h3>Selected reference face</h3><p>{len(ordered)} photo result(s)<br><span class="muted">{score_summary}</span></p><div class="row">{mode_links}</div><p>{bulk_button}</p></div></div></div><div class="grid">{cards_html}</div>{THUMB_SCRIPT}'
+    reference_img = _resilient_img(f"/media/faces/{face_id}", "Selected face", "width:150px;height:150px;object-fit:cover;border-radius:12px")
+    reference_details = f'<div class="row" style="align-items:flex-start;flex-wrap:nowrap">{reference_img}<div><h3>Selected reference face</h3><p>{len(ordered)} photo result(s)<br><span class="muted">{score_summary}</span></p></div></div>'
+    actions = f'<div class="action-list" style="margin-left:auto">{mode_links}<div style="margin-top:7px">{bulk_button}</div></div>'
+    body = f'<div class="row" style="justify-content:space-between"><div><h1>Similar Photo Search</h1><p class="muted">Using the selected detected face as a temporary reference. Similarity is a ranking signal, not an identity probability.</p></div><a class="button secondary" href="/projects/{project_id}/faces/gallery{back_arg}">Back to Faces</a></div><div class="card"><div class="split-panel" style="grid-template-columns:minmax(0,1fr) minmax(330px,430px);align-items:start">{reference_details}{actions}</div></div><div class="grid">{cards_html}</div>{THUMB_SCRIPT}'
     return page(f"{project.name} Similar Photos", body)
