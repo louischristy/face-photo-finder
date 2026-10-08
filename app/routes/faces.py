@@ -25,6 +25,8 @@ router = APIRouter(prefix="/projects", tags=["faces"])
 MODELS = Path("models")
 DETECTOR = MODELS / "face_detection_yunet_2023mar.onnx"
 RECOGNIZER = MODELS / "face_recognition_sface_2021dec.onnx"
+MAX_REFERENCE_BYTES = 20 * 1024 * 1024
+MAX_REFERENCE_PIXELS = 40_000_000
 
 
 def _engine() -> OpenCVFaceEngine:
@@ -35,16 +37,20 @@ def _engine() -> OpenCVFaceEngine:
 def _decode_reference(data: bytes) -> np.ndarray:
     try:
         with Image.open(BytesIO(data)) as image:
+            if image.width <= 0 or image.height <= 0 or image.width * image.height > MAX_REFERENCE_PIXELS:
+                raise HTTPException(413, "Reference image dimensions are too large")
             corrected = ImageOps.exif_transpose(image); rgb = np.asarray(corrected.convert("RGB"))
         return cv.cvtColor(rgb, cv.COLOR_RGB2BGR)
+    except HTTPException:
+        raise
     except Exception as exc: raise HTTPException(400, "Reference image could not be read") from exc
 
 
 def _validated_sources(session: Session, project_id: int, source_ids: list[int] | None) -> tuple[int, ...]:
     if not session.get(Project, project_id): raise HTTPException(404, "Project not found")
-    allowed = set(session.scalars(select(PhotoSource.id).where(PhotoSource.project_id == project_id)).all())
+    allowed = set(session.scalars(select(PhotoSource.id).where(PhotoSource.project_id == project_id, PhotoSource.active.is_(True))).all())
     selected = tuple(dict.fromkeys(source_ids or []))
-    if set(selected) - allowed: raise HTTPException(400, "Selected source does not belong to this project")
+    if set(selected) - allowed: raise HTTPException(400, "Selected source is unavailable or does not belong to this project")
     return selected
 
 
@@ -74,11 +80,14 @@ async def search_faces(project_id: int, reference: UploadFile = File(...), mode:
     if mode not in SEARCH_THRESHOLDS:
         raise HTTPException(400, "Invalid search mode")
     selected = _validated_sources(session, project_id, source_ids)
-    data = await reference.read()
+    try:
+        data = await reference.read(MAX_REFERENCE_BYTES + 1)
+    finally:
+        await reference.close()
     if not data: raise HTTPException(400, "Reference image is empty")
-    if len(data) > 20 * 1024 * 1024: raise HTTPException(413, "Reference image is too large")
+    if len(data) > MAX_REFERENCE_BYTES: raise HTTPException(413, "Reference image is too large")
     detected = _engine().detect_and_embed(_decode_reference(data))
-    if not detected: raise HTTPException(400, "No face was detected in the reference image")
+    if not detected: raise HTTPException(400, "No face was detected. Try a clear, front-facing selfie with good lighting.")
     reference_face = max(detected, key=lambda item: item.bbox[2] * item.bbox[3])
     matches = find_similar_faces(session, project_id, reference_face.embedding, selected, mode)
     cards, seen_photos = [], set()
