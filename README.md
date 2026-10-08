@@ -1,32 +1,51 @@
-# Face Photo Finder
+# Auroara Face Photo Finder
 
-Local-first, cross-platform browser application for organizing event photo projects backed by mixed storage sources.
+Local-first, cross-platform browser application for event photo projects backed by mixed storage sources.
 
-## Planned capabilities
+## Current capabilities
 
 - Multiple projects with isolated indexes
-- Unlimited sources per project
-- Multiple Google Drive accounts per project
-- Local macOS / Windows folders
-- USB, HDD and SSD folders, with source re-linking when mount paths change
+- Multiple Google Drive accounts plus local, USB, HDD and SSD folders
 - Recursive and incremental photo discovery
-- Project-specific search scope: all sources or any selected combination
-- Local face detection and embedding generation
-- Candidate face clustering with administrator review
-- Reference-photo similarity search
-- Strict / Balanced / Broad search modes
-- Original-photo retrieval and ZIP downloads
-- macOS and Windows support
-- Optional LAN / QR-code attendee access
+- Local face detection and embedding generation using OpenCV YuNet + SFace
+- Representative detected-face gallery without persistent identity grouping
+- Reference-photo and selected-face similarity search
+- Strict, Recommended, Balanced and Broad search modes
+- Original-photo preview, download and bulk ZIP retrieval
+- Administrator and User roles with local authentication
+- White-label application name, company, logo URL, colours and operational defaults
+- Session-bound CSRF protection and failed-login throttling
+- Machine-bound, digitally signed offline product activation
+- macOS and Windows CI coverage
 
 ## Privacy model
 
-Original photos remain in their existing storage locations. Face processing and the searchable index are designed to remain on the machine running Face Photo Finder. Uploaded search/reference images should be temporary and removed after processing. Google OAuth credentials and tokens remain local and are excluded from Git.
+Original photos remain in their configured storage locations. Face processing and the searchable biometric index remain on the computer running the application. Reference images are processed transiently. Google OAuth credentials and tokens remain local and are excluded from Git.
 
-## Storage model
+The application performs similarity search. Similarity scores are ranking signals, not identity probabilities, and the representative-face gallery does not create persistent named-person profiles.
 
-Google Drive is one provider rather than a system dependency. A project can combine Drive folders from multiple authenticated Google accounts with local or externally mounted folders. Every indexed photo retains source provenance so the application can retrieve the correct original later.
+## Product activation
 
-## Status
+Production builds require a valid Auroara activation file before first-run administrator setup. The application creates an `AFPF1-...` request code containing the product identifier, platform and a one-way machine fingerprint. Auroara signs a licence for that machine using Ed25519. The distributed application contains only the public verification key; the private signing key must never be stored in this repository or shipped to customers.
 
-Initial application architecture is being built on the `develop` branch.
+First-run sequence:
+
+`Product Activation -> Create Administrator -> Login -> Configure Storage -> Create Projects/Users`
+
+For CI and controlled development only, `AUROARA_DEV_BYPASS_LICENCE=1` bypasses activation. Production launchers/installers must not set this variable.
+
+Generated licences, private keys and local application data are excluded by `.gitignore`.
+
+## Packaging direction
+
+The production desktop package will run the FastAPI service on loopback (`127.0.0.1`) and open the user's browser to the local application. Packaging must include the OpenCV model files, Auroara branding assets, licence verification public key and Python runtime dependencies. Customer data, SQLite databases, OAuth tokens, cached previews and installed licences belong in writable application-data storage rather than inside the signed application bundle.
+
+Target deliverables are a signed/notarized macOS application/DMG and a signed Windows executable/installer. GitHub CI provides compatibility coverage, but final release acceptance still requires clean physical macOS and Windows machines.
+
+## Repository safety
+
+Never commit an Auroara licence private signing key, customer licence file, Google OAuth credential, token, database or indexed biometric data. The customer application is a verifier only; licence issuance belongs in a separate Auroara-controlled environment.
+
+## Development
+
+Implementation is maintained on the `develop` branch until release acceptance is complete.
