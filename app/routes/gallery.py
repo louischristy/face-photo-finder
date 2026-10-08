@@ -90,6 +90,17 @@ def _ordered_photo_matches(session: Session, project_id: int, reference_face: Fa
     return sorted(best_by_photo.values(), key=lambda item: (item[1], _face_quality(item[0])), reverse=True)
 
 
+def _photo_matches_and_mode_counts(session: Session, project_id: int, reference_face: Face, source_id: int | None, active_mode: str):
+    broad_matches = _ordered_photo_matches(session, project_id, reference_face, source_id, "broad")
+    counts = {
+        name: sum(1 for _, score in broad_matches if score >= threshold)
+        for name, threshold in SEARCH_THRESHOLDS.items()
+    }
+    active_threshold = SEARCH_THRESHOLDS[active_mode]
+    active_matches = [(face, score) for face, score in broad_matches if score >= active_threshold]
+    return active_matches, counts
+
+
 THUMB_SCRIPT = '''<script>
 (function() {
   const waiting = new Set(Array.from(document.querySelectorAll('img.resilient-media[data-src]')));
@@ -109,21 +120,10 @@ THUMB_SCRIPT = '''<script>
       let attempt = 0;
       const load = function() {
         attempt++;
-        img.onload = function() {
-          img.style.opacity = '1';
-          active--;
-          pump();
-        };
+        img.onload = function() { img.style.opacity = '1'; active--; pump(); };
         img.onerror = function() {
-          if (attempt < 3) {
-            setTimeout(load, attempt * 1200);
-          } else {
-            img.onerror = null;
-            img.alt = 'Preview temporarily unavailable';
-            img.style.opacity = '0.35';
-            active--;
-            pump();
-          }
+          if (attempt < 3) setTimeout(load, attempt * 1200);
+          else { img.onerror = null; img.alt = 'Preview temporarily unavailable'; img.style.opacity = '0.35'; active--; pump(); }
         };
         const joiner = img.dataset.src.indexOf('?') >= 0 ? '&' : '?';
         img.src = img.dataset.src + joiner + 'attempt=' + attempt + '&t=' + Date.now();
@@ -134,16 +134,11 @@ THUMB_SCRIPT = '''<script>
   if ('IntersectionObserver' in window) {
     const observer = new IntersectionObserver(function(entries) {
       entries.forEach(function(entry) {
-        if (entry.isIntersecting) {
-          observer.unobserve(entry.target);
-          enqueue(entry.target);
-        }
+        if (entry.isIntersecting) { observer.unobserve(entry.target); enqueue(entry.target); }
       });
     }, {rootMargin: '600px'});
     waiting.forEach(function(img) { observer.observe(img); });
-  } else {
-    Array.from(waiting).forEach(enqueue);
-  }
+  } else Array.from(waiting).forEach(enqueue);
 })();
 </script>'''
 
@@ -213,7 +208,7 @@ def face_matches(project_id: int, face_id: int, source_id: int | None = Query(No
     _validate_source(sources, source_id)
     if mode not in SEARCH_THRESHOLDS:
         raise HTTPException(400, "Search mode must be strict, recommended, balanced, or broad")
-    ordered = _ordered_photo_matches(session, project_id, reference_face, source_id, mode)
+    ordered, mode_counts = _photo_matches_and_mode_counts(session, project_id, reference_face, source_id, mode)
     cards = []
     for rank, (face, score) in enumerate(ordered, start=1):
         photo = session.get(Photo, face.photo_id)
@@ -229,7 +224,8 @@ def face_matches(project_id: int, face_id: int, source_id: int | None = Query(No
     links = []
     for name in ("strict", "recommended", "balanced", "broad"):
         css_class = "button" if name == mode else "button secondary"
-        links.append(f'<a class="{css_class}" href="/projects/{project_id}/faces/{face_id}/matches?mode={name}{source_arg}">{name.title()} ({SEARCH_THRESHOLDS[name]:.2f})</a>')
+        count = mode_counts[name]
+        links.append(f'<a class="{css_class}" href="/projects/{project_id}/faces/{face_id}/matches?mode={name}{source_arg}">{name.title()} ({SEARCH_THRESHOLDS[name]:.2f}) — {count} photo(s)</a>')
     mode_links = " ".join(links)
     back_arg = f"?source_id={source_id}" if source_id is not None else ""
     download_url = f'/projects/{project_id}/faces/{face_id}/matches/download?mode={mode}{source_arg}'
