@@ -1,16 +1,20 @@
 from collections.abc import Iterator
 from io import BytesIO
 from pathlib import Path
+import random
+import time
 
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaIoBaseDownload
 
 SCOPES = ["https://www.googleapis.com/auth/drive.readonly"]
 FOLDER_MIME = "application/vnd.google-apps.folder"
 IMAGE_MIMES = {"image/jpeg", "image/png", "image/heic", "image/heif", "image/webp"}
+RETRYABLE_STATUS_CODES = {408, 429, 500, 502, 503, 504}
 
 
 class GoogleDriveClient:
@@ -44,14 +48,31 @@ class GoogleDriveClient:
             supportsAllDrives=True,
         ).execute()
 
-    def download_file(self, file_id: str) -> bytes:
-        request = self.service.files().get_media(fileId=file_id, supportsAllDrives=True)
-        output = BytesIO()
-        downloader = MediaIoBaseDownload(output, request, chunksize=4 * 1024 * 1024)
-        done = False
-        while not done:
-            _, done = downloader.next_chunk()
-        return output.getvalue()
+    def download_file(self, file_id: str, max_attempts: int = 4) -> bytes:
+        last_error = None
+        for attempt in range(max_attempts):
+            try:
+                request = self.service.files().get_media(fileId=file_id, supportsAllDrives=True)
+                output = BytesIO()
+                downloader = MediaIoBaseDownload(output, request, chunksize=4 * 1024 * 1024)
+                done = False
+                while not done:
+                    _, done = downloader.next_chunk(num_retries=2)
+                return output.getvalue()
+            except HttpError as exc:
+                last_error = exc
+                status = getattr(exc.resp, "status", None)
+                if status not in RETRYABLE_STATUS_CODES or attempt == max_attempts - 1:
+                    raise
+            except (TimeoutError, ConnectionError, OSError) as exc:
+                last_error = exc
+                if attempt == max_attempts - 1:
+                    raise
+            delay = min(0.5 * (2 ** attempt), 4.0) + random.uniform(0.0, 0.25)
+            time.sleep(delay)
+        if last_error:
+            raise last_error
+        raise RuntimeError("Google Drive download failed without an error")
 
     def walk_images(self, root_folder_id: str) -> Iterator[dict]:
         pending = [root_folder_id]
