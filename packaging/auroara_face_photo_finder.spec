@@ -30,8 +30,41 @@ analysis = Analysis(
     noarchive=False,
 )
 pyz = PYZ(analysis.pure)
-exe = EXE(pyz, analysis.scripts, [], exclude_binaries=True, name="Auroara Face Photo Finder", debug=False, bootloader_ignore_signals=False, strip=False, upx=False, console=False)
-collection = COLLECT(exe, analysis.binaries, analysis.datas, strip=False, upx=False, name="Auroara Face Photo Finder")
+exe = EXE(
+    pyz,
+    analysis.scripts,
+    [],
+    exclude_binaries=True,
+    name="Auroara Face Photo Finder",
+    debug=False,
+    bootloader_ignore_signals=False,
+    strip=False,
+    upx=False,
+    console=False,
+)
+collection = COLLECT(
+    exe,
+    analysis.binaries,
+    analysis.datas,
+    strip=False,
+    upx=False,
+    name="Auroara Face Photo Finder",
+)
 
 if sys.platform == "darwin":
-    app = BUNDLE(collection, name="Auroara Face Photo Finder.app", bundle_identifier="com.auroaratechnologies.facephotofinder", info_plist={"CFBundleName":"Auroara Face Photo Finder","CFBundleDisplayName":"Auroara Face Photo Finder","NSHighResolutionCapable":True})
+    app = BUNDLE(
+        collection,
+        name="Auroara Face Photo Finder.app",
+        bundle_identifier="com.auroaratechnologies.facephotofinder",
+        info_plist={
+            "CFBundleName": "Auroara Face Photo Finder",
+            "CFBundleDisplayName": "Auroara Face Photo Finder",
+            "CFBundleIdentifier": "com.auroaratechnologies.facephotofinder",
+            "CFBundleShortVersionString": "0.7.0",
+            "CFBundleVersion": "0.7.0",
+            "CFBundlePackageType": "APPL",
+            "LSMinimumSystemVersion": "12.0",
+            "NSHighResolutionCapable": True,
+            "NSHumanReadableCopyright": "Copyright © Auroara Technologies Sdn Bhd. All rights reserved.",
+        },
+    )
