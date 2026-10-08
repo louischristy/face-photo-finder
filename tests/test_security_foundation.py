@@ -34,8 +34,13 @@ def _request(method="POST", content_type="application/x-www-form-urlencoded", or
 
 def test_csrf_accepts_same_origin_form_without_reading_body():
     request = _request(origin="http://127.0.0.1:8765")
+    # Starlette initializes Request._form to None.  The regression we care
+    # about is middleware parsing the form before the endpoint gets it.
+    assert request._form is None
+    assert not hasattr(request, "_body")
     asyncio.run(enforce_csrf(request))
-    assert not hasattr(request, "_form")
+    assert request._form is None
+    assert not hasattr(request, "_body")
 
 
 def test_csrf_accepts_session_bound_header():
