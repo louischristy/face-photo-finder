@@ -1,9 +1,10 @@
 from html import escape
 import math
 
+import numpy as np
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import HTMLResponse
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.database import get_session
@@ -14,6 +15,7 @@ from app.ui import page
 
 router = APIRouter(prefix="/projects", tags=["gallery"])
 PAGE_SIZE = 48
+REPRESENTATIVE_SIMILARITY = 0.62
 EMPTY_GALLERY = '<div class="card">No detected faces in this scope.</div>'
 EMPTY_MATCHES = '<div class="card">No similar photos met this search threshold.</div>'
 
@@ -36,15 +38,42 @@ def _source_options(sources, source_id: int | None):
 
 
 def _face_quality(face: Face) -> float:
-    """Presentation-quality proxy using metadata already stored during indexing.
-
-    Detector confidence is the strongest signal. Face area then favors larger,
-    more useful crops without requiring originals to be downloaded again.
-    """
     confidence = max(0.0, min(float(face.detector_score or 0.0), 1.0))
     area = max(0, int(face.bbox_w or 0)) * max(0, int(face.bbox_h or 0))
     size_score = min(math.sqrt(area) / 400.0, 1.0) if area else 0.0
     return (confidence * 0.72) + (size_score * 0.28)
+
+
+def _normalized_embedding(face: Face) -> np.ndarray:
+    vector = embedding_from_bytes(face.embedding, face.embedding_dim).astype(np.float32, copy=True).flatten()
+    norm = float(np.linalg.norm(vector))
+    if norm:
+        vector /= norm
+    return vector
+
+
+def _representative_faces(faces: list[Face]) -> tuple[list[Face], int]:
+    """Suppress highly similar gallery crops without persisting identity groups.
+
+    Faces arrive best-quality first, so when two indexed crops are sufficiently
+    similar the clearer crop remains the temporary gallery representative.
+    The underlying Face rows and embeddings are never changed or grouped.
+    """
+    representatives: list[Face] = []
+    representative_vectors: list[np.ndarray] = []
+    suppressed = 0
+    for face in faces:
+        vector = _normalized_embedding(face)
+        duplicate = any(
+            candidate.shape == vector.shape and float(np.dot(vector, candidate)) >= REPRESENTATIVE_SIMILARITY
+            for candidate in representative_vectors
+        )
+        if duplicate:
+            suppressed += 1
+            continue
+        representatives.append(face)
+        representative_vectors.append(vector)
+    return representatives, suppressed
 
 
 @router.get("/{project_id}/faces/gallery", response_class=HTMLResponse)
@@ -58,15 +87,15 @@ def face_gallery(project_id: int, source_id: int | None = Query(None), page_numb
     if source_id is not None:
         conditions.append(Face.source_id == source_id)
 
-    # Quality-sort before pagination so the first pages contain the clearest
-    # available face crops. This does not create or persist person identities.
     all_faces = session.scalars(select(Face).where(*conditions)).all()
     all_faces.sort(key=lambda face: (_face_quality(face), face.detector_score or 0.0, face.id), reverse=True)
+    representatives, suppressed = _representative_faces(all_faces)
     total = len(all_faces)
-    pages = max(1, math.ceil(total / PAGE_SIZE))
+    representative_total = len(representatives)
+    pages = max(1, math.ceil(representative_total / PAGE_SIZE))
     page_number = min(page_number, pages)
     start = (page_number - 1) * PAGE_SIZE
-    faces = all_faces[start:start + PAGE_SIZE]
+    faces = representatives[start:start + PAGE_SIZE]
 
     cards = []
     for face in faces:
@@ -78,7 +107,7 @@ def face_gallery(project_id: int, source_id: int | None = Query(None), page_numb
         quality = _face_quality(face)
         cards.append(
             f'<div class="card"><a href="/projects/{project_id}/faces/{face.id}/matches?mode=strict{source_arg}" title="Find similar photos">'
-            f'<img src="/media/faces/{face.id}" alt="Detected face" loading="lazy" style="width:100%;height:230px;object-fit:cover;border-radius:12px"></a>'
+            f'<img src="/media/faces/{face.id}" alt="Representative detected face" loading="lazy" style="width:100%;height:230px;object-fit:cover;border-radius:12px"></a>'
             f'<h3>{escape(photo.name)}</h3><p class="muted">Source: {escape(source.display_name or source.source_type)} · Quality: {quality:.2f}</p>'
             f'<p><a class="button" href="/projects/{project_id}/faces/{face.id}/matches?mode=strict{source_arg}">Find Similar Photos</a></p>'
             f'<p><a class="button secondary" href="/media/photos/{photo.id}" target="_blank">View Photo</a> <a class="button secondary" href="/media/photos/{photo.id}/download">Download Original</a></p></div>'
@@ -90,13 +119,13 @@ def face_gallery(project_id: int, source_id: int | None = Query(None), page_numb
 
     nav = '<div class="row" style="justify-content:space-between;align-items:center">'
     nav += page_link(page_number - 1, "Previous") if page_number > 1 else '<span></span>'
-    nav += f'<span class="muted">Page {page_number} of {pages} · Best available crops first</span>'
+    nav += f'<span class="muted">Page {page_number} of {pages} · Clearest representative crops first</span>'
     nav += page_link(page_number + 1, "Next") if page_number < pages else '<span></span>'
     nav += '</div>'
     cards_html = "".join(cards) or EMPTY_GALLERY
     options_html = _source_options(sources, source_id)
     body = (
-        f'<div class="row" style="justify-content:space-between"><div><h1>Detected Faces Gallery</h1><p class="muted">{total} detected face region(s), ranked by available face quality. Click a face to use it as a temporary search reference.</p></div><a class="button secondary" href="/ui/projects/{project_id}">Back to Project</a></div>'
+        f'<div class="row" style="justify-content:space-between"><div><h1>Representative Faces Gallery</h1><p class="muted">{total} indexed face region(s) · {representative_total} temporary gallery representative(s) · {suppressed} similar crop(s) suppressed. Representatives are selected at display time and are not stored as person identities.</p></div><a class="button secondary" href="/ui/projects/{project_id}">Back to Project</a></div>'
         f'<div class="card"><form class="row" method="get" action="/projects/{project_id}/faces/gallery"><select name="source_id">{options_html}</select><button type="submit">Filter Gallery</button></form></div>'
         f'{nav}<div class="grid">{cards_html}</div>{nav}'
     )
@@ -121,8 +150,6 @@ def face_matches(project_id: int, face_id: int, source_id: int | None = Query(No
     best_by_photo = {}
     for face, score in matches:
         current = best_by_photo.get(face.photo_id)
-        # Similarity remains primary; face quality breaks near-ties so a better
-        # crop represents a photograph when several detected faces are close.
         candidate_rank = (score, _face_quality(face))
         current_rank = (current[1], _face_quality(current[0])) if current else None
         if current_rank is None or candidate_rank > current_rank:
