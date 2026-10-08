@@ -12,10 +12,6 @@ from app.ui import page
 router = APIRouter(prefix="/ui", tags=["ui"])
 
 
-def _busy_form(action: str, inner: str, message: str, form_class: str = "row") -> str:
-    return f'<form class="{form_class} busy-form" action="{action}" method="post" data-busy-message="{escape(message)}">{inner}</form>'
-
-
 @router.get("/projects", response_class=HTMLResponse)
 def projects_page(session: Session = Depends(get_session)):
     projects = session.scalars(select(Project).order_by(Project.created_at.desc())).all()
@@ -47,49 +43,116 @@ def project_page(project_id: int, request: Request, session: Session = Depends(g
     search_checks = ''.join(f'<label><input style="min-width:auto" type="checkbox" name="source_ids" value="{s.id}" checked> {escape(s.display_name or s.source_type)}</label>' for s in sources)
     source_rows = ''.join(f'<tr><td>{escape(s.display_name or "Unnamed source")}</td><td><span class="pill">{escape(s.source_type)}</span></td><td>{escape(s.source_uri)}</td><td>{s.last_scanned_at.strftime("%Y-%m-%d %H:%M") if s.last_scanned_at else "Never"}</td><td><form class="busy-form" action="/projects/{project_id}/sources/{s.id}/scan" method="post" data-busy-message="Scanning source..."><button type="submit">Scan / Update</button><span class="busy-status muted" role="status"></span></form></td></tr>' for s in sources)
 
-    indexed = request.query_params.get("indexed")
-    indexed_faces = request.query_params.get("faces")
-    failed = request.query_params.get("failed")
-    result_banner = ""
-    if indexed is not None:
-        result_banner = f'<div class="card"><strong>Face indexing completed.</strong> Processed {escape(indexed)} photo(s), detected {escape(indexed_faces or "0")} face(s), failed {escape(failed or "0")}.</div>'
-
     body = f'''<div class="row" style="justify-content:space-between"><div><h1>{escape(project.name)}</h1><div class="muted">Project-specific catalogue and face search</div></div><a class="button secondary" href="/ui/projects">All Projects</a></div>
-{result_banner}
 <div class="grid"><div class="card"><div class="stat">{photo_count}</div><div class="muted">Catalogued photos</div></div><div class="card"><div class="stat">{pending}</div><div class="muted">Awaiting face indexing</div></div><div class="card"><div class="stat">{face_count}</div><div class="muted">Detected faces</div></div><div class="card"><div class="stat">{len(sources)}</div><div class="muted">Storage sources</div></div></div>
 <div class="card"><h2>Add Google Drive Source</h2><form class="row busy-form" action="/projects/{project_id}/sources/google-drive" method="post" data-busy-message="Adding Google Drive source..."><select name="storage_account_id" required><option value="">Choose Google account</option>{account_options}</select><input name="folder_url" placeholder="Google Drive folder link" required><input name="display_name" placeholder="Source name"><button type="submit">Add Drive Folder</button><span class="busy-status muted" role="status"></span></form><p class="muted"><a href="/ui/accounts">Connect another Google account</a></p></div>
 <div class="card"><h2>Add Local / External Folder</h2><form class="row busy-form" action="/projects/{project_id}/sources/local" method="post" data-busy-message="Adding folder..."><input name="folder_path" placeholder="/Volumes/Event SSD/Photos or C:\\Photos" required><input name="display_name" placeholder="Source name"><label><input style="min-width:auto" type="checkbox" name="removable_media" value="true"> External/removable</label><button type="submit">Add Folder</button><span class="busy-status muted" role="status"></span></form></div>
 <div class="card"><h2>Storage Sources</h2><table><thead><tr><th>Source</th><th>Type</th><th>Location</th><th>Last Scan</th><th>Catalogue</th></tr></thead><tbody>{source_rows or '<tr><td colspan="5">Add a storage source to begin.</td></tr>'}</tbody></table></div>
-<div class="card"><h2>1. Build / Update Face Index</h2><p class="muted">Only new or changed photos are processed. Google Drive images are downloaded temporarily for processing and are not permanently copied.</p><form id="face-index-form" class="row busy-form" action="/projects/{project_id}/faces/index" method="post" data-require-sources="true" data-busy-message="Indexing selected sources... Keep this page open; Drive photos are processed sequentially.">{index_checks}<button type="submit">Index Faces</button><span class="busy-status muted" role="status"></span></form></div>
+<div class="card"><h2>1. Build / Update Face Index</h2><p class="muted">Indexing runs in the background. You can refresh this page and reconnect to the current progress.</p><form id="face-index-form" class="row" action="/projects/{project_id}/faces/index" method="post">{index_checks}<button id="index-start" type="submit">Index Faces</button><button id="index-cancel" class="secondary" type="button" style="display:none">Cancel</button></form><div id="index-progress" style="display:none;margin-top:16px"><div style="height:12px;background:#e5e7eb;border-radius:999px;overflow:hidden"><div id="index-progress-bar" style="height:100%;width:0%;background:currentColor"></div></div><p><strong id="index-progress-title">Preparing...</strong></p><div id="index-progress-detail" class="muted"></div></div></div>
 <div class="card"><h2>2. Find My Photos</h2><p class="muted">Upload one clear reference photo. It is processed temporarily and is not stored.</p><form class="busy-form" action="/projects/{project_id}/faces/search" method="post" enctype="multipart/form-data" data-busy-message="Searching indexed faces..."><div class="row"><input type="file" name="reference" accept="image/*" required><select name="mode"><option value="strict">Strict</option><option value="recommended" selected>Recommended</option><option value="balanced">Balanced</option><option value="broad">Broad</option></select></div><div class="row" style="margin-top:12px">{search_checks}</div><p><button type="submit">Search Matching Photos</button> <span class="busy-status muted" role="status"></span></p></form></div>
-{BUSY_SCRIPT}'''
+{BUSY_SCRIPT}
+<script>
+(function() {{
+  const projectId = {project_id};
+  const form = document.getElementById('face-index-form');
+  const start = document.getElementById('index-start');
+  const cancel = document.getElementById('index-cancel');
+  const box = document.getElementById('index-progress');
+  const bar = document.getElementById('index-progress-bar');
+  const title = document.getElementById('index-progress-title');
+  const detail = document.getElementById('index-progress-detail');
+  let timer = null;
+
+  function esc(value) {{
+    const node = document.createElement('div');
+    node.textContent = value == null ? '' : String(value);
+    return node.innerHTML;
+  }}
+
+  function render(job) {{
+    const running = !!job.running;
+    box.style.display = job.status === 'idle' ? 'none' : 'block';
+    start.disabled = running;
+    start.textContent = running ? 'Indexing...' : 'Index Faces';
+    cancel.style.display = running ? 'inline-block' : 'none';
+    const pct = Number(job.percent || 0);
+    bar.style.width = Math.max(0, Math.min(100, pct)) + '%';
+    if (job.status === 'running' || job.status === 'cancelling' || job.status === 'queued') {{
+      title.textContent = 'Indexing ' + (job.completed || 0) + ' / ' + (job.total || 0) + ' — ' + pct.toFixed(1) + '%';
+    }} else if (job.status === 'completed') {{
+      title.textContent = 'Face indexing completed';
+    }} else if (job.status === 'cancelled') {{
+      title.textContent = 'Indexing cancelled';
+    }} else {{
+      title.textContent = job.message || 'Indexing status';
+    }}
+    let lines = 'Processed: ' + (job.processed || 0) + ' · Faces detected: ' + (job.faces || 0) + ' · Failed: ' + (job.failed || 0);
+    if (job.current_source) lines += '<br>Source: ' + esc(job.current_source);
+    if (job.current_photo) lines += '<br>Current: ' + esc(job.current_photo);
+    if (job.message) lines += '<br>' + esc(job.message);
+    detail.innerHTML = lines;
+    if (!running && timer) {{ clearInterval(timer); timer = null; }}
+  }}
+
+  async function poll() {{
+    try {{
+      const response = await fetch('/projects/' + projectId + '/faces/index/status', {{cache: 'no-store'}});
+      if (response.ok) render(await response.json());
+    }} catch (error) {{
+      detail.textContent = 'Unable to refresh progress. The indexing job may still be running.';
+    }}
+  }}
+
+  function beginPolling() {{
+    if (!timer) timer = setInterval(poll, 1500);
+    poll();
+  }}
+
+  form.addEventListener('submit', async function(event) {{
+    event.preventDefault();
+    if (!form.querySelector('input[name="source_ids"]:checked')) {{ alert('Select at least one source first.'); return; }}
+    start.disabled = true;
+    start.textContent = 'Starting...';
+    box.style.display = 'block';
+    title.textContent = 'Starting background indexing...';
+    detail.textContent = 'The page can now be refreshed without stopping the indexing job.';
+    try {{
+      const response = await fetch(form.action, {{method: 'POST', body: new FormData(form)}});
+      const job = await response.json();
+      if (!response.ok) throw new Error(job.detail || 'Could not start indexing');
+      render(job);
+      beginPolling();
+    }} catch (error) {{
+      start.disabled = false;
+      start.textContent = 'Index Faces';
+      title.textContent = 'Could not start indexing';
+      detail.textContent = error.message;
+    }}
+  }});
+
+  cancel.addEventListener('click', async function() {{
+    cancel.disabled = true;
+    await fetch('/projects/' + projectId + '/faces/index/cancel', {{method: 'POST'}});
+    cancel.disabled = false;
+    beginPolling();
+  }});
+
+  fetch('/projects/' + projectId + '/faces/index/status', {{cache: 'no-store'}})
+    .then(r => r.json()).then(function(job) {{ render(job); if (job.running) beginPolling(); }}).catch(function() {{}});
+}})();
+</script>'''
     return page(project.name, body)
 
 
 BUSY_SCRIPT = '''<script>
 document.querySelectorAll('form.busy-form').forEach(function(form) {
   form.addEventListener('submit', function(event) {
-    if (form.dataset.busy === '1') {
-      event.preventDefault();
-      return;
-    }
-    if (form.dataset.requireSources === 'true' && !form.querySelector('input[name="source_ids"]:checked')) {
-      event.preventDefault();
-      alert('Select at least one source first.');
-      return;
-    }
+    if (form.dataset.busy === '1') { event.preventDefault(); return; }
     form.dataset.busy = '1';
     const button = form.querySelector('button[type="submit"]');
     const status = form.querySelector('.busy-status');
-    if (button) {
-      button.dataset.originalText = button.textContent;
-      button.disabled = true;
-      button.textContent = 'Processing...';
-      button.style.opacity = '0.65';
-    }
-    if (status) {
-      status.textContent = form.dataset.busyMessage || 'Processing... Please wait.';
-    }
+    if (button) { button.disabled = true; button.textContent = 'Processing...'; button.style.opacity = '0.65'; }
+    if (status) status.textContent = form.dataset.busyMessage || 'Processing... Please wait.';
   });
 });
 </script>'''
