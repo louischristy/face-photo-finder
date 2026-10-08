@@ -4,11 +4,13 @@ import json
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from fastapi.testclient import TestClient
 from starlette.requests import Request
 
 from app import licensing
 from app.auth import SESSION_COOKIE
 from app.csrf import csrf_token, enforce_csrf
+from app.main import app
 
 
 def _request(method="POST", content_type="application/x-www-form-urlencoded", origin=None, csrf=None):
@@ -34,8 +36,6 @@ def _request(method="POST", content_type="application/x-www-form-urlencoded", or
 
 def test_csrf_accepts_same_origin_form_without_reading_body():
     request = _request(origin="http://127.0.0.1:8765")
-    # Starlette initializes Request._form to None.  The regression we care
-    # about is middleware parsing the form before the endpoint gets it.
     assert request._form is None
     assert not hasattr(request, "_body")
     asyncio.run(enforce_csrf(request))
@@ -56,6 +56,22 @@ def test_csrf_rejects_cross_origin_form():
         assert getattr(exc, "status_code", None) == 403
     else:
         raise AssertionError("cross-origin authenticated form was accepted")
+
+
+def test_csrf_middleware_returns_explicit_403(monkeypatch):
+    monkeypatch.setattr("app.main.licence_status", lambda: licensing.LicenceStatus(True, "active", "Test licence"))
+    client = TestClient(app)
+    response = client.post(
+        "/ui/settings",
+        content=b"",
+        headers={
+            "content-type": "application/json",
+            "cookie": f"{SESSION_COOKIE}=session-secret",
+            "origin": "https://example.invalid",
+        },
+    )
+    assert response.status_code == 403
+    assert response.json() == {"detail": "Invalid or missing CSRF protection"}
 
 
 def test_signed_licence_verification(monkeypatch):
