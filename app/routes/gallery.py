@@ -10,12 +10,12 @@ from sqlalchemy.orm import Session
 from app.database import get_session
 from app.models import Face, Photo, PhotoSource, Project
 from app.services.face_indexer import embedding_from_bytes
-from app.services.face_matching import find_similar_faces
+from app.services.face_matching import SEARCH_THRESHOLDS, find_similar_faces
 from app.ui import page
 
 router = APIRouter(prefix="/projects", tags=["gallery"])
 PAGE_SIZE = 48
-REPRESENTATIVE_SIMILARITY = 0.62
+DEDUP_THRESHOLDS = {"conservative": 0.66, "normal": 0.58, "aggressive": 0.52}
 EMPTY_GALLERY = '<div class="card">No detected faces in this scope.</div>'
 EMPTY_MATCHES = '<div class="card">No similar photos met this search threshold.</div>'
 
@@ -37,6 +37,15 @@ def _source_options(sources, source_id: int | None):
     return "".join(options)
 
 
+def _dedup_options(selected_mode: str):
+    labels = {"conservative": "Conservative", "normal": "Normal", "aggressive": "Aggressive"}
+    options = []
+    for name, threshold in DEDUP_THRESHOLDS.items():
+        selected = " selected" if name == selected_mode else ""
+        options.append(f'<option value="{name}"{selected}>{labels[name]} ({threshold:.2f})</option>')
+    return "".join(options)
+
+
 def _face_quality(face: Face) -> float:
     confidence = max(0.0, min(float(face.detector_score or 0.0), 1.0))
     area = max(0, int(face.bbox_w or 0)) * max(0, int(face.bbox_h or 0))
@@ -52,20 +61,14 @@ def _normalized_embedding(face: Face) -> np.ndarray:
     return vector
 
 
-def _representative_faces(faces: list[Face]) -> tuple[list[Face], int]:
-    """Suppress highly similar gallery crops without persisting identity groups.
-
-    Faces arrive best-quality first, so when two indexed crops are sufficiently
-    similar the clearer crop remains the temporary gallery representative.
-    The underlying Face rows and embeddings are never changed or grouped.
-    """
+def _representative_faces(faces: list[Face], threshold: float) -> tuple[list[Face], int]:
     representatives: list[Face] = []
     representative_vectors: list[np.ndarray] = []
     suppressed = 0
     for face in faces:
         vector = _normalized_embedding(face)
         duplicate = any(
-            candidate.shape == vector.shape and float(np.dot(vector, candidate)) >= REPRESENTATIVE_SIMILARITY
+            candidate.shape == vector.shape and float(np.dot(vector, candidate)) >= threshold
             for candidate in representative_vectors
         )
         if duplicate:
@@ -77,19 +80,22 @@ def _representative_faces(faces: list[Face]) -> tuple[list[Face], int]:
 
 
 @router.get("/{project_id}/faces/gallery", response_class=HTMLResponse)
-def face_gallery(project_id: int, source_id: int | None = Query(None), page_number: int = Query(1, alias="page", ge=1), session: Session = Depends(get_session)):
+def face_gallery(project_id: int, source_id: int | None = Query(None), dedup: str = Query("normal"), page_number: int = Query(1, alias="page", ge=1), session: Session = Depends(get_session)):
     project = session.get(Project, project_id)
     if not project:
         raise HTTPException(404, "Project not found")
     sources = _project_sources(session, project_id)
     _validate_source(sources, source_id)
+    if dedup not in DEDUP_THRESHOLDS:
+        raise HTTPException(400, "Deduplication mode must be conservative, normal, or aggressive")
+    threshold = DEDUP_THRESHOLDS[dedup]
     conditions = [Face.project_id == project_id]
     if source_id is not None:
         conditions.append(Face.source_id == source_id)
 
     all_faces = session.scalars(select(Face).where(*conditions)).all()
     all_faces.sort(key=lambda face: (_face_quality(face), face.detector_score or 0.0, face.id), reverse=True)
-    representatives, suppressed = _representative_faces(all_faces)
+    representatives, suppressed = _representative_faces(all_faces, threshold)
     total = len(all_faces)
     representative_total = len(representatives)
     pages = max(1, math.ceil(representative_total / PAGE_SIZE))
@@ -115,7 +121,7 @@ def face_gallery(project_id: int, source_id: int | None = Query(None), page_numb
 
     def page_link(number, label):
         source_arg = f"&source_id={source_id}" if source_id is not None else ""
-        return f'<a class="button secondary" href="/projects/{project_id}/faces/gallery?page={number}{source_arg}">{label}</a>'
+        return f'<a class="button secondary" href="/projects/{project_id}/faces/gallery?page={number}&dedup={dedup}{source_arg}">{label}</a>'
 
     nav = '<div class="row" style="justify-content:space-between;align-items:center">'
     nav += page_link(page_number - 1, "Previous") if page_number > 1 else '<span></span>'
@@ -124,9 +130,11 @@ def face_gallery(project_id: int, source_id: int | None = Query(None), page_numb
     nav += '</div>'
     cards_html = "".join(cards) or EMPTY_GALLERY
     options_html = _source_options(sources, source_id)
+    dedup_html = _dedup_options(dedup)
+    suppression_rate = (suppressed / total * 100.0) if total else 0.0
     body = (
-        f'<div class="row" style="justify-content:space-between"><div><h1>Representative Faces Gallery</h1><p class="muted">{total} indexed face region(s) · {representative_total} temporary gallery representative(s) · {suppressed} similar crop(s) suppressed. Representatives are selected at display time and are not stored as person identities.</p></div><a class="button secondary" href="/ui/projects/{project_id}">Back to Project</a></div>'
-        f'<div class="card"><form class="row" method="get" action="/projects/{project_id}/faces/gallery"><select name="source_id">{options_html}</select><button type="submit">Filter Gallery</button></form></div>'
+        f'<div class="row" style="justify-content:space-between"><div><h1>Representative Faces Gallery</h1><p class="muted">{total} indexed face region(s) · {representative_total} temporary representative(s) · {suppressed} similar crop(s) suppressed ({suppression_rate:.1f}%). Dedup mode: {dedup.title()} · threshold {threshold:.2f}.</p></div><a class="button secondary" href="/ui/projects/{project_id}">Back to Project</a></div>'
+        f'<div class="card"><form class="row" method="get" action="/projects/{project_id}/faces/gallery"><select name="source_id">{options_html}</select><select name="dedup">{dedup_html}</select><button type="submit">Apply Gallery Filter</button></form><p class="muted">Conservative keeps more representatives. Aggressive suppresses more visually similar crops. This changes display only; the indexed faces are untouched.</p></div>'
         f'{nav}<div class="grid">{cards_html}</div>{nav}'
     )
     return page(f"{project.name} Faces", body)
@@ -142,7 +150,7 @@ def face_matches(project_id: int, face_id: int, source_id: int | None = Query(No
         raise HTTPException(404, "Face not found")
     sources = _project_sources(session, project_id)
     _validate_source(sources, source_id)
-    if mode not in {"strict", "balanced", "broad"}:
+    if mode not in SEARCH_THRESHOLDS:
         raise HTTPException(400, "Search mode must be strict, balanced, or broad")
     reference = embedding_from_bytes(reference_face.embedding, reference_face.embedding_dim)
     scope = (source_id,) if source_id is not None else ()
@@ -156,16 +164,17 @@ def face_matches(project_id: int, face_id: int, source_id: int | None = Query(No
             best_by_photo[face.photo_id] = (face, score)
     ordered = sorted(best_by_photo.values(), key=lambda item: (item[1], _face_quality(item[0])), reverse=True)
     cards = []
-    for face, score in ordered:
+    for rank, (face, score) in enumerate(ordered, start=1):
         photo = session.get(Photo, face.photo_id)
         source = session.get(PhotoSource, face.source_id)
         if not photo or not source:
             continue
         quality = _face_quality(face)
+        margin = score - SEARCH_THRESHOLDS[mode]
         cards.append(
             f'<div class="card">'
             f'<div class="row" style="align-items:flex-start"><img src="/media/faces/{face.id}" alt="Matched face crop" loading="lazy" style="width:110px;height:110px;object-fit:cover;border-radius:12px">'
-            f'<div><strong>Matched face</strong><p class="muted">Similarity: {score:.3f}<br>Crop quality: {quality:.2f}</p></div></div>'
+            f'<div><strong>Result #{rank}</strong><p class="muted">Similarity: {score:.3f}<br>Threshold: {SEARCH_THRESHOLDS[mode]:.2f}<br>Margin: +{margin:.3f}<br>Crop quality: {quality:.2f}</p></div></div>'
             f'<img src="/media/photos/{photo.id}" alt="{escape(photo.name)}" loading="lazy" style="width:100%;height:260px;object-fit:cover;border-radius:12px;margin-top:10px">'
             f'<h3>{escape(photo.name)}</h3><p class="muted">Source: {escape(source.display_name or source.source_type)}</p>'
             f'<p><a class="button" href="/media/photos/{photo.id}" target="_blank">View Photo</a> <a class="button secondary" href="/media/photos/{photo.id}/download">Download Original</a></p></div>'
@@ -174,13 +183,18 @@ def face_matches(project_id: int, face_id: int, source_id: int | None = Query(No
     links = []
     for name in ("strict", "balanced", "broad"):
         css_class = "button" if name == mode else "button secondary"
-        links.append(f'<a class="{css_class}" href="/projects/{project_id}/faces/{face_id}/matches?mode={name}{source_arg}">{name.title()}</a>')
+        links.append(f'<a class="{css_class}" href="/projects/{project_id}/faces/{face_id}/matches?mode={name}{source_arg}">{name.title()} ({SEARCH_THRESHOLDS[name]:.2f})</a>')
     mode_links = " ".join(links)
     back_arg = f"?source_id={source_id}" if source_id is not None else ""
     cards_html = "".join(cards) or EMPTY_MATCHES
+    if ordered:
+        scores = [score for _, score in ordered]
+        score_summary = f'Highest {max(scores):.3f} · Lowest {min(scores):.3f} · Active threshold {SEARCH_THRESHOLDS[mode]:.2f}'
+    else:
+        score_summary = f'No results at active threshold {SEARCH_THRESHOLDS[mode]:.2f}'
     body = (
         f'<div class="row" style="justify-content:space-between"><div><h1>Similar Photo Search</h1><p class="muted">Using the selected detected face as a temporary reference. Similarity is a ranking signal, not an identity probability.</p></div><a class="button secondary" href="/projects/{project_id}/faces/gallery{back_arg}">Back to Faces</a></div>'
-        f'<div class="card"><div class="row"><img src="/media/faces/{face_id}" alt="Selected face" style="width:120px;height:120px;object-fit:cover;border-radius:12px"><div><h3>Selected reference face</h3><p>{len(ordered)} photo result(s)</p><div class="row">{mode_links}</div></div></div></div>'
+        f'<div class="card"><div class="row"><img src="/media/faces/{face_id}" alt="Selected face" style="width:120px;height:120px;object-fit:cover;border-radius:12px"><div><h3>Selected reference face</h3><p>{len(ordered)} photo result(s)<br><span class="muted">{score_summary}</span></p><div class="row">{mode_links}</div></div></div></div>'
         f'<div class="grid">{cards_html}</div>'
     )
     return page(f"{project.name} Similar Photos", body)
