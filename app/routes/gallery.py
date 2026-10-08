@@ -112,10 +112,10 @@ def face_gallery(project_id: int, source_id: int | None = Query(None), dedup: st
         source_arg = f"&source_id={source_id}" if source_id is not None else ""
         quality = _face_quality(face)
         cards.append(
-            f'<div class="card"><a href="/projects/{project_id}/faces/{face.id}/matches?mode=strict{source_arg}" title="Find similar photos">'
+            f'<div class="card"><a href="/projects/{project_id}/faces/{face.id}/matches?mode=recommended{source_arg}" title="Find similar photos">'
             f'<img src="/media/faces/{face.id}" alt="Representative detected face" loading="lazy" style="width:100%;height:230px;object-fit:cover;border-radius:12px"></a>'
             f'<h3>{escape(photo.name)}</h3><p class="muted">Source: {escape(source.display_name or source.source_type)} · Quality: {quality:.2f}</p>'
-            f'<p><a class="button" href="/projects/{project_id}/faces/{face.id}/matches?mode=strict{source_arg}">Find Similar Photos</a></p>'
+            f'<p><a class="button" href="/projects/{project_id}/faces/{face.id}/matches?mode=recommended{source_arg}">Find Similar Photos</a></p>'
             f'<p><a class="button secondary" href="/media/photos/{photo.id}" target="_blank">View Photo</a> <a class="button secondary" href="/media/photos/{photo.id}/download">Download Original</a></p></div>'
         )
 
@@ -141,7 +141,7 @@ def face_gallery(project_id: int, source_id: int | None = Query(None), dedup: st
 
 
 @router.get("/{project_id}/faces/{face_id}/matches", response_class=HTMLResponse)
-def face_matches(project_id: int, face_id: int, source_id: int | None = Query(None), mode: str = Query("strict"), session: Session = Depends(get_session)):
+def face_matches(project_id: int, face_id: int, source_id: int | None = Query(None), mode: str = Query("recommended"), session: Session = Depends(get_session)):
     project = session.get(Project, project_id)
     if not project:
         raise HTTPException(404, "Project not found")
@@ -151,7 +151,7 @@ def face_matches(project_id: int, face_id: int, source_id: int | None = Query(No
     sources = _project_sources(session, project_id)
     _validate_source(sources, source_id)
     if mode not in SEARCH_THRESHOLDS:
-        raise HTTPException(400, "Search mode must be strict, balanced, or broad")
+        raise HTTPException(400, "Search mode must be strict, recommended, balanced, or broad")
     reference = embedding_from_bytes(reference_face.embedding, reference_face.embedding_dim)
     scope = (source_id,) if source_id is not None else ()
     matches = find_similar_faces(session, project_id, reference, scope, mode)
@@ -181,7 +181,7 @@ def face_matches(project_id: int, face_id: int, source_id: int | None = Query(No
         )
     source_arg = f"&source_id={source_id}" if source_id is not None else ""
     links = []
-    for name in ("strict", "balanced", "broad"):
+    for name in ("strict", "recommended", "balanced", "broad"):
         css_class = "button" if name == mode else "button secondary"
         links.append(f'<a class="{css_class}" href="/projects/{project_id}/faces/{face_id}/matches?mode={name}{source_arg}">{name.title()} ({SEARCH_THRESHOLDS[name]:.2f})</a>')
     mode_links = " ".join(links)
