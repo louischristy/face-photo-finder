@@ -15,8 +15,9 @@ from app.auth import require_user
 from app.database import get_session
 from app.models import Photo, PhotoSource, Project, User
 from app.services.face_engine import OpenCVFaceEngine
-from app.services.face_matching import find_similar_faces
+from app.services.face_matching import SEARCH_THRESHOLDS, find_similar_faces
 from app.services.index_jobs import cancel_index_job, get_index_job, start_index_job
+from app.settings import get_app_settings
 from app.ui import page
 
 register_heif_opener()
@@ -65,9 +66,13 @@ def index_faces_cancel(project_id: int, session: Session = Depends(get_session),
 
 
 @router.post("/{project_id}/faces/search", response_class=HTMLResponse)
-async def search_faces(project_id: int, reference: UploadFile = File(...), mode: str = Form("recommended"), source_ids: list[int] | None = Form(None), session: Session = Depends(get_session), _: User = Depends(require_user)):
+async def search_faces(project_id: int, reference: UploadFile = File(...), mode: str = Form(""), source_ids: list[int] | None = Form(None), session: Session = Depends(get_session), user: User = Depends(require_user)):
     project = session.get(Project, project_id)
     if not project: raise HTTPException(404, "Project not found")
+    if not mode:
+        mode = get_app_settings(session).default_search_mode
+    if mode not in SEARCH_THRESHOLDS:
+        raise HTTPException(400, "Invalid search mode")
     selected = _validated_sources(session, project_id, source_ids)
     data = await reference.read()
     if not data: raise HTTPException(400, "Reference image is empty")
@@ -86,4 +91,4 @@ async def search_faces(project_id: int, reference: UploadFile = File(...), mode:
             cards.append(f'<div class="card">{preview}<h3>{escape(photo.name)}</h3><div class="pill">Similarity {score:.3f}</div><p class="muted">Source: {escape(source.display_name or source.source_type)}</p>{actions}</div>')
     results_html = "".join(cards) or '<div class="card">No matches found. Try Balanced or Broad mode, or another reference photo.</div>'
     body = f'<div class="row" style="justify-content:space-between"><div><h1>Search Results</h1><p class="muted">{len(cards)} matching photographs · {escape(mode.title())} mode. Similarity is a ranking signal, not an identity probability.</p></div><a class="button secondary" href="/ui/projects/{project_id}">Back to Project</a></div><div class="grid">{results_html}</div>'
-    return page(f"{project.name} Search", body)
+    return page(f"{project.name} Search", body, user=user)
