@@ -27,6 +27,7 @@ DETECTOR = MODELS / "face_detection_yunet_2023mar.onnx"
 RECOGNIZER = MODELS / "face_recognition_sface_2021dec.onnx"
 MAX_REFERENCE_BYTES = 20 * 1024 * 1024
 MAX_REFERENCE_PIXELS = 40_000_000
+MAX_DETECTION_EDGE = 2400
 
 
 def _engine() -> OpenCVFaceEngine:
@@ -39,7 +40,14 @@ def _decode_reference(data: bytes) -> np.ndarray:
         with Image.open(BytesIO(data)) as image:
             if image.width <= 0 or image.height <= 0 or image.width * image.height > MAX_REFERENCE_PIXELS:
                 raise HTTPException(413, "Reference image dimensions are too large")
-            corrected = ImageOps.exif_transpose(image); rgb = np.asarray(corrected.convert("RGB"))
+            corrected = ImageOps.exif_transpose(image).convert("RGB")
+            # Phone cameras commonly produce very large portrait images. Normalize the
+            # orientation first, then reduce extreme dimensions before OpenCV/YuNet.
+            # This keeps the face large enough to detect while avoiding detector issues
+            # on full-resolution 12/48 MP mobile captures.
+            if max(corrected.size) > MAX_DETECTION_EDGE:
+                corrected.thumbnail((MAX_DETECTION_EDGE, MAX_DETECTION_EDGE), Image.Resampling.LANCZOS)
+            rgb = np.ascontiguousarray(np.asarray(corrected, dtype=np.uint8))
         return cv.cvtColor(rgb, cv.COLOR_RGB2BGR)
     except HTTPException:
         raise
