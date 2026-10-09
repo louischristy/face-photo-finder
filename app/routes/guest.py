@@ -19,7 +19,7 @@ from starlette.background import BackgroundTask
 from app.database import get_session
 from app.models import Photo, PhotoSource, Project
 from app.routes.faces import MAX_REFERENCE_BYTES, _decode_reference, _engine
-from app.routes.media import BULK_TEMP_ROOT, _original_bytes, _remove_temp_file, _safe_zip_name
+from app.routes.media import BULK_TEMP_ROOT, CACHE_ROOT, _original_bytes, _remove_temp_file, _safe_zip_name, _write_cache
 from app.services.face_matching import find_similar_faces
 
 register_heif_opener()
@@ -27,6 +27,8 @@ router = APIRouter(prefix="/guest", tags=["guest-event"])
 _SEARCHES: dict[str, tuple[float, int, tuple[int, ...]]] = {}
 SEARCH_TTL = 30 * 60
 MAX_MATCHES = 500
+SOURCE_READ_ATTEMPTS = 3
+SOURCE_RETRY_DELAYS = (0.35, 0.9)
 
 
 def _authorize(x_guest_key: str | None = Header(None)) -> None:
@@ -84,6 +86,27 @@ def _photo_from_token(token: str) -> tuple[int, int]:
     return project_id, photo_ids[index]
 
 
+def _original_bytes_with_retry(session: Session, photo: Photo, source: PhotoSource) -> bytes:
+    if source.source_type != "google_drive":
+        return _original_bytes(session, photo, source)
+    last_error: HTTPException | None = None
+    for attempt in range(SOURCE_READ_ATTEMPTS):
+        try:
+            return _original_bytes(session, photo, source)
+        except HTTPException as exc:
+            last_error = exc
+            if exc.status_code != 502 or attempt >= SOURCE_READ_ATTEMPTS - 1:
+                raise
+            time.sleep(SOURCE_RETRY_DELAYS[attempt])
+    if last_error:
+        raise last_error
+    raise HTTPException(502, "Unable to retrieve photo")
+
+
+def _guest_preview_cache(photo_id: int) -> Path:
+    return CACHE_ROOT / "guest-photos" / f"{photo_id}.jpg"
+
+
 @router.post("/search", dependencies=[Depends(_authorize)])
 async def guest_search(reference: UploadFile = File(...), session: Session = Depends(get_session)):
     try:
@@ -127,13 +150,20 @@ def guest_preview(photo_token: str, session: Session = Depends(get_session)):
     source = session.get(PhotoSource, photo.source_id)
     if not source:
         raise HTTPException(404, "Photo source not found")
+
+    cache_path = _guest_preview_cache(photo_id)
+    if cache_path.is_file():
+        return FileResponse(cache_path, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=86400"})
+
     try:
-        with Image.open(BytesIO(_original_bytes(session, photo, source))) as image:
+        with Image.open(BytesIO(_original_bytes_with_retry(session, photo, source))) as image:
             corrected = ImageOps.exif_transpose(image).convert("RGB")
             corrected.thumbnail((1400, 1400))
             output = BytesIO()
             corrected.save(output, format="JPEG", quality=86, optimize=True)
-        return Response(output.getvalue(), media_type="image/jpeg", headers={"Cache-Control": "private, max-age=300"})
+        preview = output.getvalue()
+        _write_cache(cache_path, preview)
+        return Response(preview, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=86400"})
     except HTTPException:
         raise
     except Exception as exc:
@@ -153,7 +183,7 @@ def guest_download(photo_token: str, session: Session = Depends(get_session)):
     if not source:
         raise HTTPException(404, "Photo source not found")
     safe_name = Path(photo.name).name.replace(chr(34), "")
-    return Response(_original_bytes(session, photo, source), media_type=photo.mime_type or "application/octet-stream", headers={"Content-Disposition": f'attachment; filename="{safe_name}"', "Cache-Control": "no-store"})
+    return Response(_original_bytes_with_retry(session, photo, source), media_type=photo.mime_type or "application/octet-stream", headers={"Content-Disposition": f'attachment; filename="{safe_name}"', "Cache-Control": "no-store"})
 
 
 @router.get("/search/{search_id}/download", dependencies=[Depends(_authorize)])
@@ -176,7 +206,7 @@ def guest_download_all(search_id: str, session: Session = Depends(get_session)):
                 if not source:
                     continue
                 try:
-                    bundle.writestr(_safe_zip_name(photo.name, photo.id, used), _original_bytes(session, photo, source))
+                    bundle.writestr(_safe_zip_name(photo.name, photo.id, used), _original_bytes_with_retry(session, photo, source))
                 except Exception as exc:
                     failures.append(f"{photo.name}: {exc}")
             if failures:
