@@ -69,6 +69,21 @@ def _search(search_id: str) -> tuple[int, tuple[int, ...]]:
     return item[1], item[2]
 
 
+def _photo_token(search_id: str, index: int) -> str:
+    return f"{search_id}.{index}"
+
+
+def _photo_from_token(token: str) -> tuple[int, int]:
+    search_id, separator, raw_index = token.rpartition(".")
+    if not separator or not raw_index.isdigit():
+        raise HTTPException(404, "Photo not found")
+    project_id, photo_ids = _search(search_id)
+    index = int(raw_index)
+    if index < 0 or index >= len(photo_ids):
+        raise HTTPException(404, "Photo not found")
+    return project_id, photo_ids[index]
+
+
 @router.post("/search", dependencies=[Depends(_authorize)])
 async def guest_search(reference: UploadFile = File(...), session: Session = Depends(get_session)):
     try:
@@ -97,12 +112,15 @@ async def guest_search(reference: UploadFile = File(...), session: Session = Dep
     search_id = secrets.token_urlsafe(24)
     _cleanup_searches()
     _SEARCHES[search_id] = (time.time(), project_id, tuple(photo_ids))
-    return {"search_id": search_id, "matches": [{"photo_id": item} for item in photo_ids]}
+    return {"search_id": search_id, "matches": [{"photo_id": _photo_token(search_id, index)} for index, _item in enumerate(photo_ids)]}
 
 
-@router.get("/photos/{photo_id}", dependencies=[Depends(_authorize)])
-def guest_preview(photo_id: int, session: Session = Depends(get_session)):
-    project_id, source_ids = _event_scope(session)
+@router.get("/photos/{photo_token}", dependencies=[Depends(_authorize)])
+def guest_preview(photo_token: str, session: Session = Depends(get_session)):
+    project_id, photo_id = _photo_from_token(photo_token)
+    configured_project, source_ids = _event_scope(session)
+    if project_id != configured_project:
+        raise HTTPException(404, "Photo not found")
     photo = session.get(Photo, photo_id)
     if not photo or photo.project_id != project_id or photo.source_id not in source_ids:
         raise HTTPException(404, "Photo not found")
@@ -122,9 +140,12 @@ def guest_preview(photo_id: int, session: Session = Depends(get_session)):
         raise HTTPException(415, "Image could not be rendered") from exc
 
 
-@router.get("/photos/{photo_id}/download", dependencies=[Depends(_authorize)])
-def guest_download(photo_id: int, session: Session = Depends(get_session)):
-    project_id, source_ids = _event_scope(session)
+@router.get("/photos/{photo_token}/download", dependencies=[Depends(_authorize)])
+def guest_download(photo_token: str, session: Session = Depends(get_session)):
+    project_id, photo_id = _photo_from_token(photo_token)
+    configured_project, source_ids = _event_scope(session)
+    if project_id != configured_project:
+        raise HTTPException(404, "Photo not found")
     photo = session.get(Photo, photo_id)
     if not photo or photo.project_id != project_id or photo.source_id not in source_ids:
         raise HTTPException(404, "Photo not found")
